@@ -39,7 +39,7 @@ class GameState(object):
         """enums.MenuState: The current menu scene, such as IN_GAME, or STAGE_SELECT"""
         self.submenu = enums.SubMenu.UNKNOWN_SUBMENU
         """(enums.SubMenu): The current sub-menu"""
-        self.players = dict()
+        self.players: dict[int, PlayerState] = dict()
         """(dict of int - gamestate.PlayerState): Dict of PlayerState objects. Key is controller port"""
         self.player = self.players
         """(dict of int - gamestate.PlayerState): WARNING: Deprecated. Will be removed in version 1.0.0. Use `players` instead
@@ -78,7 +78,7 @@ class PlayerState(object):
                  'speed_ground_x_self', 'cursor_x', 'cursor_y', 'coin_down', 'controller_status', 'off_stage', 'iasa',
                  'moonwalkwarning', 'controller_state', 'ecb_bottom', 'ecb_top', 'ecb_left', 'ecb_right',
                  'costume', 'cpu_level', 'is_holding_cpu_slider', 'nana', 'position', 'cursor', 'ecb', 'nickName', 'connectCode',
-                 'team_id', 'is_powershield')
+                 'displayName', 'team_id', 'is_powershield')
     def __init__(self):
         # This value is what the character currently is IN GAME
         #   So this will have no meaning while in menus
@@ -151,7 +151,7 @@ class PlayerState(object):
         self.iasa = 0
         self.moonwalkwarning = False
         """(bool): Helper variable to tell you that if you dash back right now, it'll moon walk"""
-        self.controller_state = melee.controller.ControllerState()
+        self.controller_state = melee.ControllerState()
         """(controller.ControllerState): What buttons were pressed for this character"""
         self.ecb = ECB()
         self.ecb_right = (0, 0)
@@ -172,6 +172,8 @@ class PlayerState(object):
         """(string): The in-game nickname for the player. Might be blank."""
         self.connectCode = ""
         """(string): The rollback connect code for the player. Might be blank."""
+        self.displayName = ""
+        """(string): The Slippi Online display name for the play. Might be blank"""
         self.team_id = 0
         """(int): The team ID of the player. This is different than costume, and only relevant during teams."""
 
