@@ -127,7 +127,7 @@ class DumpConfig:
 
 # pylint: disable=too-many-instance-attributes
 class Console:
-    """The console object that represents your Dolphin / GameCube / SLP file
+    """The console object that represents your Dolphin / Wii / SLP file
     """
     def __init__(self,
                  path: Optional[str] = None,
@@ -171,7 +171,7 @@ class Console:
                 This is useful so instances don't interfere with each other.
             copy_home_directory (bool): Copy an existing home directory on the system.
                 Unset to get a fresh directory that doesn't depend on system state.
-            slippi_address (str): IP address of the Dolphin / gamecube to connect to.
+            slippi_address (str): IP address of the Dolphin / Wii to connect to.
             slippi_port (int): UDP port that slippi will listen on
             online_delay (int): How many frames of delay to apply in online matches
             blocking_input (bool): Should dolphin block waiting for bot input
@@ -210,11 +210,11 @@ class Console:
             dump_config (DumpConfig): Settings for video dumps.
         """
         self.logger = logger
-        self.system = system
+        self.is_dolphin = is_dolphin
         self.path = path
         self.dolphin_home_path = dolphin_home_path
         self.temp_dir = None
-        if tmp_home_directory and self.system =="dolphin":
+        if tmp_home_directory and self.is_dolphin:
             self.temp_dir = tempfile.mkdtemp(prefix='libmelee_')
             home_dir = self.temp_dir + "/User/"
             if copy_home_directory:
@@ -224,7 +224,7 @@ class Console:
         self.processingtime = 0
         self._frametimestamp = time.time()
         self.slippi_address = slippi_address
-        """(str): IP address of the Dolphin / gamecube to connect to."""
+        """(str): IP address of the Dolphin / Wii to connect to."""
         self.slippi_port = slippi_port
         """(int): UDP port of slippi server. Default 51441"""
         self.eventsize = [0] * 0x100
@@ -276,9 +276,8 @@ class Console:
         # Half-completed gamestate not yet ready to add to the list
         self._temp_gamestate = None
         self._process = None
-        assert(self.system in ["dolphin", "gamecube", "file"])
-        if self.system == "dolphin":
-            self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port, True)
+        if self.is_dolphin:
+            self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port)
             if self.path:
                 self.is_mainline = is_mainline_dolphin(path)
 
@@ -286,8 +285,6 @@ class Console:
                     raise ValueError('EXI inputs not supported on mainline')
 
                 self._setup_home_directory()
-        elif self.system == "gamecube":
-            self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port, False)
         else:
             self._slippstream = SLPFileStreamer(self.path)
 
@@ -314,7 +311,7 @@ class Console:
                 self.characterdata[enums.Character(line["CharacterIndex"])] = line
 
     def connect(self):
-        """ Connects to the Slippi server (dolphin or gamecube).
+        """ Connects to the Slippi server (dolphin or wii).
 
         Returns:
             True is successful, False otherwise
@@ -366,7 +363,7 @@ class Console:
               dolphin was built. Only applies to mainline dolphin; Ishiiruka
               bakes the platform into the executable at compilation time.
         """
-        assert self.system == "dolphin" and self.path
+        assert self.is_dolphin and self.path
 
         exe_path = get_exe_path(self.path)
         command = [exe_path]
@@ -395,7 +392,7 @@ class Console:
         """ Stop the console.
 
         For Dolphin instances, this will kill the dolphin process.
-        For gamecubes and SLP files, it just shuts down our connection
+        For Wiis and SLP files, it just shuts down our connection
          """
         if self.path:
             self.connected = False
@@ -630,17 +627,14 @@ class Console:
 
                 elif message["type"] == "game_event":
                     if len(message["payload"]) > 0:
-                        if self.system == "dolphin":
+                        if self.is_dolphin:
                             frame_ended = self.__handle_slippstream_events(base64.b64decode(message["payload"]), self._temp_gamestate)
                         else:
                             frame_ended = self.__handle_slippstream_events(message["payload"], self._temp_gamestate)
 
                 elif message["type"] == "menu_event":
                     if len(message["payload"]) > 0:
-                        if self.system == "dolphin":
-                            self.__handle_slippstream_menu_event(base64.b64decode(message["payload"]), self._temp_gamestate)
-                        else:
-                            self.__handle_slippstream_menu_event(message["payload"], self._temp_gamestate)
+                        self.__handle_slippstream_menu_event(base64.b64decode(message["payload"]), self._temp_gamestate)
                         frame_ended = True
 
                 elif self._use_manual_bookends and message["type"] == "frame_end" and self._frame != -10000:
@@ -681,9 +675,6 @@ class Console:
         """ Handle a series of events, provided sequentially in a byte array """
         gamestate.menu_state = enums.Menu.IN_GAME
         while len(event_bytes) > 0:
-            # A null message type means that the rest of the data is padding
-            if event_bytes[0] == 0x00:
-                return True
             event_size = self.eventsize[event_bytes[0]]
             if len(event_bytes) < event_size:
                 print("WARNING: Something went wrong unpacking events. Data is probably missing")
@@ -969,12 +960,12 @@ class Console:
         ecb_top_x = 0
         ecb_top_y = 0
         try:
-            ecb_top_x = np.ndarray((1,), ">f", event_bytes, 0x51)[0]
+            ecb_top_x = np.ndarray((1,), ">f", event_bytes, 0x4D)[0]
         except TypeError:
             ecb_top_x = 0
         # ECB Top edge, y
         try:
-            ecb_top_y = np.ndarray((1,), ">f", event_bytes, 0x55)[0]
+            ecb_top_y = np.ndarray((1,), ">f", event_bytes, 0x51)[0]
         except TypeError:
             ecb_top_y = 0
         playerstate.ecb.top.x = ecb_top_x
@@ -985,12 +976,12 @@ class Console:
         ecb_bot_x = 0
         ecb_bot_y = 0
         try:
-            ecb_bot_x = np.ndarray((1,), ">f", event_bytes, 0x59)[0]
+            ecb_bot_x = np.ndarray((1,), ">f", event_bytes, 0x55)[0]
         except TypeError:
             ecb_bot_x = 0
         # ECB Bottom edge, y coord
         try:
-            ecb_bot_y = np.ndarray((1,), ">f", event_bytes, 0x5D)[0]
+            ecb_bot_y = np.ndarray((1,), ">f", event_bytes, 0x59)[0]
         except TypeError:
             ecb_bot_y = 0
         playerstate.ecb.bottom.x = ecb_bot_x
@@ -1001,12 +992,12 @@ class Console:
         ecb_left_x = 0
         ecb_left_y = 0
         try:
-            ecb_left_x = np.ndarray((1,), ">f", event_bytes, 0x61)[0]
+            ecb_left_x = np.ndarray((1,), ">f", event_bytes, 0x5D)[0]
         except TypeError:
             ecb_left_x = 0
         # ECB left edge, y coord
         try:
-            ecb_left_y = np.ndarray((1,), ">f", event_bytes, 0x65)[0]
+            ecb_left_y = np.ndarray((1,), ">f", event_bytes, 0x61)[0]
         except TypeError:
             ecb_left_y = 0
         playerstate.ecb.left.x = ecb_left_x
@@ -1017,12 +1008,12 @@ class Console:
         ecb_right_x = 0
         ecb_right_y = 0
         try:
-            ecb_right_x = np.ndarray((1,), ">f", event_bytes, 0x69)[0]
+            ecb_right_x = np.ndarray((1,), ">f", event_bytes, 0x65)[0]
         except TypeError:
             ecb_right_x = 0
         # ECB right edge, y coord
         try:
-            ecb_right_y = np.ndarray((1,), ">f", event_bytes, 0x6D)[0]
+            ecb_right_y = np.ndarray((1,), ">f", event_bytes, 0x69)[0]
         except TypeError:
             ecb_right_y = 0
         playerstate.ecb.right.x = ecb_right_x
@@ -1033,11 +1024,11 @@ class Console:
 
         # FoD platform heights
         try:
-            gamestate._fod_platform_left = np.ndarray((1,), ">f", event_bytes, 0x71)[0]
+            gamestate._fod_platform_left = np.ndarray((1,), ">f", event_bytes, 0x6D)[0]
         except TypeError:
             gamestate._fod_platform_left = 0
         try:
-            gamestate._fod_platform_right = np.ndarray((1,), ">f", event_bytes, 0x75)[0]
+            gamestate._fod_platform_right = np.ndarray((1,), ">f", event_bytes, 0x71)[0]
         except TypeError:
             gamestate._fod_platform_right = 0
 
@@ -1117,6 +1108,7 @@ class Console:
             gamestate.players[2] = PlayerState()
             gamestate.players[3] = PlayerState()
             gamestate.players[4] = PlayerState()
+
         elif scene == 0x0202:
             gamestate.menu_state = enums.Menu.IN_GAME
         elif scene == 0x0001:
@@ -1129,8 +1121,6 @@ class Console:
             gamestate.players[4] = PlayerState()
         elif scene == 0x0000:
             gamestate.menu_state = enums.Menu.PRESS_START
-        elif scene == 0x0402:
-            gamestate.menu_state = enums.Menu.POSTGAME_SCORES
         else:
             gamestate.menu_state = enums.Menu.UNKNOWN_MENU
 

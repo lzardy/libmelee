@@ -148,9 +148,6 @@ class SlippstreamClient:
         self.timestamp = ""
         self.consoleNick = ""
         self.players = {}
-        self.now_frame_time = 0
-        self.last_frame_time = 0
-        self.server = None
 
     def shutdown(self):
         """ Close down the socket and connection to the console """
