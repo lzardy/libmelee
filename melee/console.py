@@ -1204,7 +1204,10 @@ class Console:
                 gamestate.stage_select_cursor_y = player.cursor.y
 
         # Frame count
-        gamestate.frame = np.ndarray((1,), ">i", event_bytes, 0x39)[0]
+        try:
+            gamestate.frame = np.ndarray((1,), ">i", event_bytes, 0x39)[0]
+        except TypeError:
+            gamestate.frame = gamestate.frame + 1
 
         # Sub-menu
         try:

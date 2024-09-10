@@ -48,10 +48,10 @@ parser.add_argument('--config', '-i', type=str,
 class KBController():
     hotkeys_enabled = False
     hotkeys = {}
-    hotkeys_hook = None
+    # hotkeys_hook = None
     config = configparser.ConfigParser()
     section = "Settings"
-    auto_techchase = False
+    inputs_reserved = False
     
     def __init__(self, input_config_path):
         self.cfg_path = input_config_path
@@ -61,16 +61,17 @@ class KBController():
             print(args.config + " does not contain Settings section!")
             self.create_smashbox_config()
 
-        self.hotkeys_enabled = True
-        self.hotkeys_hook = keyboard.hook(self.kb_callback)
+        self.toggle_hotkeys()
+        # self.hotkeys_hook = keyboard.hook(self.kb_callback)
         self.hotkeys_state = {}
         
         i = 1
         for input, key in self.config.items(self.section):
             print(key)
 
-            self.hotkeys[key] = i
-            self.hotkeys[i] = key
+            parsed_key = keyboard.parse_hotkey(key)
+            self.hotkeys[parsed_key] = i
+            self.hotkeys[i] = parsed_key
             self.hotkeys_state[i] = False
             i += 1
     
@@ -105,6 +106,9 @@ class KBController():
         self.config.set(self.section, 'Analog Mod X2', 'v')
         self.config.set(self.section, 'Analog Mod Y1', 'b')
         self.config.set(self.section, 'Analog Mod Y2', 'space')
+        # Misc Buttons (26+)
+        self.config.set(self.section, 'Toggle Hotkeys', 'shift+alt+s')
+        self.config.set(self.section, 'Turbo Modifier', 'shift')
         with open(self.cfg_path, 'w') as configfile:
             self.config.write(configfile)
 
@@ -112,22 +116,31 @@ class KBController():
         print("Toggled hotkeys.")
         self.hotkeys_enabled = not self.hotkeys_enabled
         if self.hotkeys_enabled:
+            # self.hotkeys_hook = keyboard.hook(self.kb_callback)
             i = 1
             for input, key in self.config.items(self.section):
-                self.hotkeys_hook = keyboard.hook(self.kb_callback)
-                keyboard.block_key(key)
+                keyboard.add_hotkey(key, self.kb_press_callback, key, True)
+                keyboard.add_hotkey(key, self.kb_release_callback, key, suppress=True, trigger_on_release=True)
+                # keyboard.hook_key(key, self.kb_callback, True)
                 i += 1
         else:
+            # self.hotkeys_hook = keyboard.unhook(self.hotkeys_hook)
+            # self.hotkeys_hook = None
             i = 1
             for input, key in self.config.items(self.section):
-                self.hotkeys_hook.remove()
-                keyboard.unblock_key(key)
+                # Skip the toggle hotkey
+                if i == 26:
+                    continue
+                keyboard.remove_hotkey(key)
+                # keyboard.unhook_key(key)
+                # keyboard.unblock_key(key)
                 i += 1
 
     def release_hotkeys(self):
         i = 1
         for input, key in self.config.items(self.section):
             self.hotkeys_state[i] = False
+            self.hotkey_released(i)
             i += 1
 
     # Gets opposite analog input
@@ -187,6 +200,10 @@ class KBController():
             # Buttons
             elif num <= 21:
                 self.human_button_pressed(num)
+            elif num == 26:
+                self.toggle_hotkeys()
+            elif num == 27:
+                self.release_hotkeys()
 
     def hotkey_released(self, num):
         if num == 0:
@@ -417,51 +434,38 @@ class KBController():
     def human_release_shoulder(self):
         controller.press_shoulder(melee.Button.BUTTON_L, 0.0)
     
-    def kb_callback(self, event):
-        key = event.name
-        if key in self.hotkeys:
-            num = self.hotkeys[key]
-            self.hotkeys_state[num] = (event.event_type == KEY_DOWN)
-            if (event.event_type == KEY_DOWN):
+    def kb_press_callback(self, key):
+        if self.inputs_reserved:
+            self.release_hotkeys()
+            return
+        
+        parsed_key = keyboard.parse_hotkey(key)
+        for i in range(1, len(self.hotkeys_state)):
+            first_code = self.hotkeys[i][0][0][0]
+            pressed_code = parsed_key[0][0][0]
+            if parsed_key == self.hotkeys[i] or first_code == pressed_code:
+                num = self.hotkeys[self.hotkeys[i]]
+                self.hotkeys_state[num] = True
                 self.hotkey_pressed(num)
-            else:
-                self.hotkey_released(num)
                 
-            # Always update analog inputs when modifier keys are pressed/released
-            if num >= 22 and num <= 25:
-                for i in range(1, 9):
-                    if self.hotkeys_state[i]:
+                # Always update analog inputs when modifier keys are pressed/released
+                if num >= 22 and num <= 25:
+                    for i in range(1, 9):
                         self.human_tilt_analog(i)
-
-def player_damaged(playerstate):
-    if (playerstate.hitstun_frames_left or
-        playerstate.hitlag_left and
-        (playerstate.action == melee.Action.DAMAGE_HIGH_1 or
-        playerstate.action == melee.Action.DAMAGE_HIGH_2 or
-        playerstate.action == melee.Action.DAMAGE_HIGH_3 or
-        playerstate.action == melee.Action.DAMAGE_NEUTRAL_1 or
-        playerstate.action == melee.Action.DAMAGE_NEUTRAL_2 or
-        playerstate.action == melee.Action.DAMAGE_NEUTRAL_3 or
-        playerstate.action == melee.Action.DAMAGE_LOW_1 or
-        playerstate.action == melee.Action.DAMAGE_LOW_2 or
-        playerstate.action == melee.Action.DAMAGE_LOW_3 or
-        playerstate.action == melee.Action.DAMAGE_AIR_1 or
-        playerstate.action == melee.Action.DAMAGE_AIR_2 or
-        playerstate.action == melee.Action.DAMAGE_AIR_3 or
-        playerstate.action == melee.Action.DAMAGE_SCREW or
-        playerstate.action == melee.Action.DAMAGE_SCREW_AIR or
-        playerstate.action == melee.Action.DAMAGE_FLY_HIGH or
-        playerstate.action == melee.Action.DAMAGE_FLY_NEUTRAL or
-        playerstate.action == melee.Action.DAMAGE_FLY_LOW or
-        playerstate.action == melee.Action.DAMAGE_FLY_TOP or
-        playerstate.action == melee.Action.DAMAGE_FLY_ROLL or
-        playerstate.action == melee.Action.SHIELD_STUN or
-        playerstate.action == melee.Action.LYING_GROUND_UP_HIT or
-        playerstate.action == melee.Action.DAMAGE_GROUND or
-        playerstate.action == melee.Action.DAMAGE_BIND)):
-        return True
-
-    return False
+    
+    def kb_release_callback(self, key):
+        if self.inputs_reserved:
+            self.release_hotkeys()
+            return
+        
+        parsed_key = keyboard.parse_hotkey(key)
+        for i in range(1, len(self.hotkeys_state)):
+            first_code = self.hotkeys[i][0][0][0]
+            pressed_code = parsed_key[0][0][0]
+            if parsed_key == self.hotkeys[i] or first_code == pressed_code:
+                num = self.hotkeys[self.hotkeys[i]]
+                self.hotkeys_state[num] = False
+                self.hotkey_released(num)
 
 def sq_distance(x1, x2):
     return sum(map(lambda x: (x[0] - x[1])**2, zip(x1, x2)))
@@ -513,22 +517,52 @@ def signal_handler(sig, frame):
         print("Log file created: " + log.filename)
     print("Shutting down cleanly...")
     sys.exit(0)
+    
+def in_safezone(player, stage_boundary):
+    if not player:
+        return False
+    
+    left_bound = stage_boundary[0][0]
+    right_bound = stage_boundary[1][0]
+    # We are safe if we are far enough above stage where attacks are safe to do
+    # Or, we are within the bounds of the stage
+    in_bounds = player.x > left_bound and player.x < right_bound
+    safe_height = player.y > 6
+    if (in_bounds or safe_height):
+        return True
+    
+    return False
+    
+def get_counter_inputs(player):
+    character = player.character
+    if character == Character.ROY or character == Character.MARTH:
+        return [Button.BUTTON_B], (0.5, -0.0475)
+    # Character.PEACH
+    return [Button.BUTTON_B], (0.5, 0.5)
+
+def get_tilt(type):
+    tilt = (0, 0)
+    if type == melee.Button.BUTTON_MAIN:
+        tilt = controller.current.main_stick
+    else:
+        tilt = controller.current.c_stick
+    return tilt
 
 def main():
     initialized = False
-        
-    last_frame = 0
-    last_input_frame = 0
-    hit_frame = 0
+    move_queued = 0
+    # First array for buttons, two tuples for main and c sticks
+    new_inputs = [[], None, None]
+    target_frame = 0
     last_sdi_input = (0.5, 0.5)
-    local_player = (0, None)
+    local_port = 0
     tech_lockout = 0
     meteor_jump_lockout = 0
     ledge_grab_count = 0
     meteor_ff_lockout = 0
     powershielded_last = False
-    opponents = []
-    current_opponent = (0, None)
+    opponent_ports = []
+    opponent_port = 0
     
     signal.signal(signal.SIGINT, signal_handler)
 
@@ -606,45 +640,60 @@ def main():
                 initialized = True
             
             # Discover our target player
-            if not local_player[1] or len(opponents) == 0:
-                if not local_player[1]:
-                    local_player = get_target_player(gamestate, 'LIZA#594')
-                    if not local_player[1]:
+            local_player_invalid = local_port not in gamestate.players
+            if local_player_invalid or len(opponent_ports) == 0:
+                if local_player_invalid:
+                    local_port = get_target_player(gamestate, 'SOUL#127')
+                    local_player_invalid = local_port not in gamestate.players
+                    if local_player_invalid:
                         print("Searching by character...")
-                        local_port = melee.gamestate.port_detector(gamestate, Character.ROY, 0)
-                        local_player = (local_port, gamestate.players[local_port])
-                        if local_player[1]:
-                            print("Found player:", local_player[0])
-                if len(opponents) == 0:
-                    opponents = get_opponents(gamestate, local_player[0])
+                        local_port = melee.gamestate.port_detector(gamestate, Character.MARTH, costume)
+                        local_player_invalid = local_port not in gamestate.players
+                        if not local_player_invalid:
+                            print("Found player:", local_port)
+                        else:
+                            print("Failed to find player.")
+                            # If the discovered port was unsure, reroll our costume for next time
+                            costume = random.randint(0, 4)
+                if len(opponent_ports) == 0:
+                    opponent_ports = get_opponents(gamestate, local_port)
             else:
                 # Figure out who our opponent is
                 #   Opponent is the closest player that is a different costume
-                if len(opponents) > 1:
+                if len(opponent_ports) > 1:
                     nearest_dist = 1000
-                    nearest_player = None
-                    for opponent in opponents:
-                        xdist = local_player[1].position.x - opponent[1].position.x
-                        ydist = local_player[1].position.y - opponent[1].position.y
+                    nearest_port = 0
+                    # Validate first
+                    for port in opponent_ports:
+                        if port not in gamestate.players:
+                            opponent_ports.remove(port)
+                            
+                    for port in opponent_ports:
+                        opponent = gamestate.players[port]
+                        xdist = gamestate.players[local_port].position.x - opponent.position.x
+                        ydist = gamestate.players[local_port].position.y - opponent.position.y
                         dist = math.sqrt((xdist**2) + (ydist**2))
                         if dist < nearest_dist:
                             nearest_dist = dist
-                            nearest_player = opponent
-                    current_opponent = nearest_player
+                            nearest_port = port
+                    opponent_port = nearest_port
                     gamestate.distance = nearest_dist
+                elif len(opponent_ports) == 1:
+                    opponent_port = opponent_ports[0]
                 else:
-                    current_opponent = opponents[0]
+                    print("Failed to find opponent")
+                    continue
 
                 # Pick the right climber to be the opponent
-                if current_opponent[1].nana is not None:
-                    xdist = current_opponent[1].nana.position.x - local_player[1].position.x
-                    ydist = current_opponent[1].nana.position.y - local_player[1].position.y
+                if gamestate.players[opponent_port].nana is not None:
+                    xdist = gamestate.players[opponent_port].nana.position.x - gamestate.players[local_port].position.x
+                    ydist = gamestate.players[opponent_port].nana.position.y - gamestate.players[local_port].position.y
                     dist = math.sqrt((xdist**2) + (ydist**2))
                     if dist < gamestate.distance:
                         gamestate.distance = dist
-                        popo = current_opponent[1]
-                        current_opponent = (current_opponent[0], current_opponent[1].nana)
-                        current_opponent[1].nana = popo
+                        popo = gamestate.players[opponent_port]
+                        gamestate.players[opponent_port] = gamestate.players[opponent_port].nana
+                        gamestate.players[opponent_port].nana = popo
 
                 knownprojectiles = []
                 for projectile in gamestate.projectiles:
@@ -661,7 +710,7 @@ def main():
                     if projectile.type == ProjectileType.PESTICIDE:
                         continue
                     # Ignore projectiles owned by us
-                    if projectile.owner == local_player[0]:
+                    if projectile.owner == local_port:
                         continue
                     if projectile.type not in [ProjectileType.UNKNOWN_PROJECTILE, ProjectileType.PEACH_PARASOL, \
                         ProjectileType.FOX_LASER, ProjectileType.SHEIK_CHAIN, ProjectileType.SHEIK_SMOKE]:
@@ -669,37 +718,37 @@ def main():
                 gamestate.projectiles = knownprojectiles
 
                 # Yoshi shield animations are weird. Change them to normal shield
-                if current_opponent[1].character == Character.YOSHI:
-                    if current_opponent[1].action in [melee.Action.NEUTRAL_B_CHARGING, melee.Action.NEUTRAL_B_FULL_CHARGE, melee.Action.LASER_GUN_PULL]:
-                        current_opponent[1].action = melee.Action.SHIELD
+                if gamestate.players[opponent_port].character == Character.YOSHI:
+                    if gamestate.players[opponent_port].action in [melee.Action.NEUTRAL_B_CHARGING, melee.Action.NEUTRAL_B_FULL_CHARGE, melee.Action.LASER_GUN_PULL]:
+                        gamestate.players[opponent_port].action = melee.Action.SHIELD
 
                 # Tech lockout
-                if local_player[1].controller_state.button[Button.BUTTON_L]:
+                if gamestate.players[local_port].controller_state.button[Button.BUTTON_L]:
                     tech_lockout = 40
                 else:
                     tech_lockout -= 1
                     tech_lockout = max(0, tech_lockout)
 
                 # Jump meteor cancel lockout
-                if local_player[1].controller_state.button[Button.BUTTON_Y] or \
-                    local_player[1].controller_state.main_stick[1] > 0.8:
+                if gamestate.players[local_port].controller_state.button[Button.BUTTON_Y] or \
+                    gamestate.players[local_port].controller_state.main_stick[1] > 0.8:
                     meteor_jump_lockout = 40
                 else:
                     meteor_jump_lockout -= 1
                     meteor_jump_lockout = max(0, meteor_jump_lockout)
 
                 # Firefox meteor cancel lockout
-                if local_player[1].controller_state.button[Button.BUTTON_B] and \
-                    local_player[1].controller_state.main_stick[1] > 0.8:
+                if gamestate.players[local_port].controller_state.button[Button.BUTTON_B] and \
+                    gamestate.players[local_port].controller_state.main_stick[1] > 0.8:
                     meteor_ff_lockout = 40
                 else:
                     meteor_ff_lockout -= 1
                     meteor_ff_lockout = max(0, meteor_ff_lockout)
 
                 # Keep a ledge grab count
-                if current_opponent[1].action == Action.EDGE_CATCHING and current_opponent[1].action_frame == 1:
+                if gamestate.players[opponent_port].action == Action.EDGE_CATCHING and gamestate.players[opponent_port].action_frame == 1:
                     ledge_grab_count += 1
-                if current_opponent[1].on_ground:
+                if gamestate.players[opponent_port].on_ground:
                     ledge_grab_count = 0
                 if gamestate.frame == -123:
                     ledge_grab_count = 0
@@ -708,48 +757,88 @@ def main():
                 gamestate.custom["meteor_jump_lockout"] = meteor_jump_lockout
                 gamestate.custom["meteor_ff_lockout"] = meteor_ff_lockout
 
-                if local_player[1].action in [Action.SHIELD_REFLECT, Action.SHIELD_STUN]:
-                    if local_player[1].is_powershield:
+                if gamestate.players[local_port].action in [Action.SHIELD_REFLECT, Action.SHIELD_STUN]:
+                    if gamestate.players[local_port].is_powershield:
                         powershielded_last = True
-                    elif local_player[1].hitlag_left > 0:
+                    elif gamestate.players[local_port].hitlag_left > 0:
                         powershielded_last = False
 
                 gamestate.custom["powershielded_last"] = powershielded_last
 
                 # Let's treat Counter-Moves as invulnerable. So we'll know to not attack during that time
                 countering = False
-                if current_opponent[1].character in [Character.ROY, Character.MARTH]:
-                    if current_opponent[1].action in [Action.MARTH_COUNTER, Action.MARTH_COUNTER_FALLING]:
+                if gamestate.players[opponent_port].character in [Character.ROY, Character.MARTH]:
+                    if gamestate.players[opponent_port].action in [Action.MARTH_COUNTER, Action.MARTH_COUNTER_FALLING]:
                         # We consider Counter to start a frame early and a frame late
-                        if 4 <= current_opponent[1].action_frame <= 30:
+                        if 4 <= gamestate.players[opponent_port].action_frame <= 30:
                             countering = True
-                if current_opponent[1].character == Character.PEACH:
-                    if current_opponent[1].action in [Action.UP_B_GROUND, Action.DOWN_B_STUN]:
-                        if 4 <= current_opponent[1].action_frame <= 30:
+                if gamestate.players[opponent_port].character == Character.PEACH:
+                    if gamestate.players[opponent_port].action in [Action.UP_B_GROUND, Action.DOWN_B_STUN]:
+                        if 4 <= gamestate.players[opponent_port].action_frame <= 30:
                             countering = True
                 if countering:
-                    current_opponent[1].invulnerable = True
-                    current_opponent[1].invulnerability_left = max(29 - current_opponent[1].action_frame, current_opponent[1].invulnerability_left)
+                    gamestate.players[opponent_port].invulnerable = True
+                    gamestate.players[opponent_port].invulnerability_left = max(29 - gamestate.players[opponent_port].action_frame, gamestate.players[opponent_port].invulnerability_left)
 
                 # Platform drop is fully actionable. Don't be fooled
-                if current_opponent[1].action == Action.PLATFORM_DROP:
-                    current_opponent[1].hitstun_frames_left = 0
-                    
-                player_velocity_total_y = local_player[1].speed_y_self + local_player[1].speed_y_attack
-                # Determine if opponent will hit us
-                if framedata.in_range(current_opponent[1], local_player[1], gamestate.stage) != 0:
-                    controller.simple_press(0.5, -0.0475, Button.BUTTON_B)
-        
-                last_frame = gamestate.frame
-
+                if gamestate.players[opponent_port].action == Action.PLATFORM_DROP:
+                    gamestate.players[opponent_port].hitstun_frames_left = 0
+                
+                # Skip non-actionable frames
+                if framedata.is_hit(gamestate.players[local_port]) or framedata.is_damaged(gamestate.players[local_port]):
+                    continue
+                
+                if move_queued == 0 and framedata.can_special_attack(gamestate.players[local_port]):
+                    # We only attack when it is safe to do so
+                    safe_attack = in_safezone(gamestate.players[local_port], all_edges)
+                    player_velocity_total_y = gamestate.players[local_port].speed_y_self + gamestate.players[local_port].speed_y_attack
+                    # Determine if opponent will hit us
+                    opponent_character = gamestate.players[opponent_port].character
+                    opponent_action = gamestate.players[opponent_port].action
+                    is_attacking = framedata.is_attacking(gamestate.players[opponent_port])
+                    is_grabbing = framedata.is_grab(opponent_character, opponent_action)
+                    if is_attacking and not is_grabbing:
+                        hit_frame = framedata.in_range(gamestate.players[opponent_port], gamestate.players[local_port], gamestate.stage)
+                        if hit_frame != 0:
+                            current_frame = gamestate.players[opponent_port].action_frame
+                            frames_till_hit = hit_frame - current_frame
+                            frame_window = framedata.counter_window(gamestate.players[local_port])
+                            if frames_till_hit >= frame_window[0] and frames_till_hit <= frame_window[1]:
+                                if safe_attack:
+                                    kb_controller.inputs_reserved = True
+                                    controller.release_all()
+                                    counter_inputs = get_counter_inputs(gamestate.players[local_port])
+                                    new_inputs[0].extend(counter_inputs[0])
+                                    new_inputs[1] = counter_inputs[1]
+                                    move_queued = gamestate.frame
+                if move_queued != 0:
+                    if move_queued <= gamestate.frame - 1:
+                        controller.release_all()
+                        new_inputs = [[], None, None]
+                        if move_queued <= gamestate.frame - 2:
+                            kb_controller.inputs_reserved = False
+                            move_queued = 0
+                
+                if new_inputs[1]:
+                    # new main stick inputs
+                    if new_inputs[1]:
+                        controller.tilt_analog(Button.BUTTON_MAIN, new_inputs[1][0], new_inputs[1][1])
+                if new_inputs[2]:
+                    # new c stick inputs
+                    if new_inputs[2]:
+                        controller.tilt_analog(Button.BUTTON_C, new_inputs[2][0], new_inputs[2][1])
+                if len(new_inputs[0]) != 0:
+                    # do new button inputs
+                    for new_button in new_inputs[0]:
+                        controller.press_button(new_button)
             if log:
                 log.logframe(gamestate)
                 log.writeframe()
         else:
             initialized = False
-            local_player = (0, None)
-            current_opponent = (0, None)
-            opponents = []
+            local_port = 0
+            opponent_port = 0
+            opponent_ports = []
             
             # If we're not in game, don't log the frame
             if log:
@@ -760,20 +849,20 @@ def get_target_player(gamestate, target):
     for key, player in gamestate.players.items():
         if player.connectCode == target:
             print("Found player:", player.connectCode)
-            return (key, player)
+            return key
     print("Unable to find player:", target)
-    return (0, None)
+    return 0
 
 def get_opponents(gamestate, target_port):
     # Discover opponents of the target player
-    opponents = []
+    opponent_ports = []
     for key, player in gamestate.players.items():
         if key != target_port:
-            opponents.append((key, player))
+            opponent_ports.append(key)
             print("Found opponent in port:", key)
-    if len(opponents) == 0:
+    if len(opponent_ports) == 0:
         print("Unable to find opponents of port:", target_port)
-    return opponents
+    return opponent_ports
 
 if __name__ == '__main__':
     main()

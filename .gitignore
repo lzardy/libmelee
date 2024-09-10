@@ -2,8 +2,6 @@
 Logs/*
 MANIFEST
 
-/framedata.csv
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -111,3 +109,4 @@ Session.vim
 tags
 # Persistent undo
 [._]*.un~
+.vscode/launch.json

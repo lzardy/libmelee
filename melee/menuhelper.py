@@ -62,10 +62,7 @@ class MenuHelper():
                                             start=autostart)
         # If we're at the postgame scores screen, spam START
         elif gamestate.menu_state == enums.Menu.POSTGAME_SCORES:
-            MenuHelper.skip_postgame(controller=controller, gamestate=gamestate)
-        # Skip the press start screen
-        elif gamestate.menu_state == enums.Menu.PRESS_START:
-            MenuHelper.choose_versus_mode(gamestate=gamestate, controller=controller)
+            MenuHelper.skip_postgame(controller=controller)
         # If we're at the stage select screen, choose a stage
         elif gamestate.menu_state == enums.Menu.STAGE_SELECT:
             MenuHelper.choose_stage(stage=stage_selected,
@@ -321,9 +318,9 @@ class MenuHelper():
             return
 
         # Make sure the port is set to "Human"
-        if gamestate.players[controlling_port].controller_status != enums.ControllerStatus.CONTROLLER_HUMAN:
-            MenuHelper.change_controller_status(controller, gamestate, controlling_port, enums.ControllerStatus.CONTROLLER_HUMAN)
-            return
+        # if gamestate.players[controlling_port].controller_status != enums.ControllerStatus.CONTROLLER_HUMAN:
+            # MenuHelper.change_controller_status(controller, gamestate, controlling_port, enums.ControllerStatus.CONTROLLER_HUMAN)
+            # return
 
         # We are already set, so let's taunt our opponent
         if correct_character and swag and not start:
@@ -519,10 +516,11 @@ class MenuHelper():
     @staticmethod
     def skip_postgame(controller):
         """ Spam the start button """
-        if gamestate.frame % 60 == 0:
+        #Alternate pressing start and letting go
+        if controller.prev.button[enums.Button.BUTTON_START] == False:
             controller.press_button(enums.Button.BUTTON_START)
         else:
-            controller.release_all()
+            controller.release_button(enums.Button.BUTTON_START)
 
     @staticmethod
     def change_controller_status(controller, gamestate, targetport, status, character=None):

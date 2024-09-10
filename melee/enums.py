@@ -85,6 +85,13 @@ class AttackState(Enum):
     ATTACKING = 1
     COOLDOWN = 2
     NOT_ATTACKING = 3
+    
+class DodgeState(Enum):
+    """The phases a dodge can be in """
+    WINDUP = 0
+    DODGING = 1
+    COOLDOWN = 2
+    NOT_DODGING = 3
 
 class Character(Enum):
     """A Melee character ID.
@@ -258,6 +265,12 @@ class Button(Enum):
     #Control sticks considered "buttons" here
     BUTTON_MAIN = "MAIN"
     BUTTON_C = "C"
+
+class Analog(Enum):
+    UP = 0
+    LEFT = 1
+    DOWN = 2
+    RIGHT = 3
 
 class Action(Enum):
     """ The in-game action (or animation) a character can be in
@@ -570,7 +583,7 @@ class Action(Enum):
     THROWN_MEWTWO = 0x12F
     THROWN_MEWTWO_AIR = 0x130
     WARP_STAR_JUMP = 0x131
-    WARP_STAP_FALL = 0x132
+    WARP_STAR_FALL = 0x132
     HAMMER_WAIT = 0x133
     HAMMER_WALK = 0x134
     HAMMER_TURN = 0x135

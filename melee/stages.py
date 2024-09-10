@@ -40,7 +40,7 @@ EDGE_GROUND_POSITION = {
     enums.Stage.YOSHIS_STORY : 56
 }
 
-def top_platform_position(gamestate):
+def top_platform_position(stage):
     """Gets the position of the top platform
 
     Args:
@@ -49,17 +49,17 @@ def top_platform_position(gamestate):
     Returns:
         (float, float, float): Tuple of height, left edge, right edge. (None, None, None) if no platform
     """
-    if gamestate.stage == enums.Stage.FINAL_DESTINATION:
+    if stage == enums.Stage.FINAL_DESTINATION:
         return (None, None, None)
-    if gamestate.stage == enums.Stage.POKEMON_STADIUM:
+    if stage == enums.Stage.POKEMON_STADIUM:
         return (None, None, None)
-    if gamestate.stage == enums.Stage.BATTLEFIELD:
+    if stage == enums.Stage.BATTLEFIELD:
         return (54.40010070800781, -18.80000114440918, 18.80000114440918)
-    if gamestate.stage == enums.Stage.DREAMLAND:
+    if stage == enums.Stage.DREAMLAND:
         return (51.42539978027344, -19.01810073852539, 19.017099380493164)
-    if gamestate.stage == enums.Stage.FOUNTAIN_OF_DREAMS:
+    if stage == enums.Stage.FOUNTAIN_OF_DREAMS:
         return (42.750099182128906, -14.25, 14.25)
-    if gamestate.stage == enums.Stage.YOSHIS_STORY:
+    if stage == enums.Stage.YOSHIS_STORY:
         return (42.000099182128906, -15.75, 15.75)
     return (None, None, None)
 
@@ -68,7 +68,7 @@ def side_platform_position(right_platform, gamestate):
 
     Args:
         (bool): Is it the right platform?
-        (gamestate.Gamestate): The current gamestate
+        (enums.Stage): The current stage
 
     Returns:
         (float, float, float): Tuple of height, left edge, right edge
@@ -82,7 +82,7 @@ def left_platform_position(gamestate):
     """Gets the position of the left platform
 
     Args:
-        (gamestate.Gamestate): The current gamestate
+        (enums.Stage): The current stage
 
     Returns:
         (float, float, float): Tuple of height, left edge, right edge
@@ -105,7 +105,7 @@ def right_platform_position(gamestate):
     """Gets the position of the right platform
 
     Args:
-        (gamestate.Gamestate): The current gamestate
+        (enums.Stage): The current stage
 
     Returns:
         (float, float, float): Tuple of height, left edge, right edge
