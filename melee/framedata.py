@@ -1133,7 +1133,7 @@ class FrameData:
         elif character == Character.MARTH:
             return (4, 30)
         elif character == Character.PEACH:
-            return (9, 31)
+            return (10, 30)
             
         return (0, 0)
     
@@ -1544,7 +1544,6 @@ class FrameData:
         return (
             player.action == Action.SHIELD_START or
             player.action == Action.SHIELD or
-            player.action == Action.SHIELD_RELEASE or
             player.action == Action.SHIELD_STUN or
             player.action == Action.SHIELD_REFLECT
         )
