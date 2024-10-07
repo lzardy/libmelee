@@ -9,6 +9,7 @@ import csv
 import os
 import math
 from collections import defaultdict
+from melee import enums
 from melee.enums import Action, Character, AttackState, DodgeState
 from melee import stages
 
@@ -143,7 +144,8 @@ class FrameData:
         # hardcode them since it's just more cumbersome to do otherwise
         rolls = [Action.SPOTDODGE, Action.ROLL_FORWARD, Action.ROLL_BACKWARD, \
             Action.NEUTRAL_TECH, Action.FORWARD_TECH, Action.BACKWARD_TECH, \
-            Action.GROUND_GETUP, Action.TECH_MISS_UP, Action.TECH_MISS_DOWN, \
+            Action.NEUTRAL_GETUP, Action.GROUND_GETUP, Action.TECH_MISS_UP, Action.TECH_MISS_DOWN, \
+            Action.LYING_GROUND_UP, Action.LYING_GROUND_DOWN, Action.GETUP_ATTACK, Action.GROUND_ATTACK_UP, \
             Action.EDGE_GETUP_SLOW, Action.EDGE_GETUP_QUICK, Action.EDGE_ROLL_SLOW, \
             Action.EDGE_ROLL_QUICK, Action.GROUND_ROLL_FORWARD_UP, Action.GROUND_ROLL_BACKWARD_UP, \
             Action.GROUND_ROLL_FORWARD_DOWN, Action.GROUND_ROLL_BACKWARD_DOWN, Action.SHIELD_BREAK_FLY, \
@@ -581,7 +583,7 @@ class FrameData:
 
             position = player.position.x + distance
             stage = gamestate.stage
-            if player.action not in [Action.TECH_MISS_UP, Action.TECH_MISS_DOWN]:
+            if player.action not in [Action.TECH_MISS_UP, Action.TECH_MISS_DOWN, Action.LYING_GROUND_UP, Action.LYING_GROUND_DOWN]:
                 # Adjust the position to account for the fact that we can't roll off the platform
                 side_platform_height, side_platform_left, side_platform_right = stages.side_platform_position(player.position.x > 0, gamestate)
                 top_platform_height, top_platform_left, top_platform_right = stages.top_platform_position(stage)
@@ -819,7 +821,7 @@ class FrameData:
         yspeed = max(gamestate.opponent_state.position.y - gamestate.opponent_state.__prev_y, 0)
 
         # Some actions never have locomotion. Make sure to not count it
-        if gamestate.opponent_state.action in [Action.TECH_MISS_UP, Action.TECH_MISS_DOWN]:
+        if gamestate.opponent_state.action in [Action.TECH_MISS_UP, Action.TECH_MISS_DOWN, Action.LYING_GROUND_UP, Action.LYING_GROUND_DOWN]:
             xspeed = 0
             yspeed = 0
 
@@ -927,25 +929,25 @@ class FrameData:
         self.csvfile.close()
         self.actionfile.close()
 
-    def slide_distance(self, character_state, initspeed, frames):
+    def slide_distance(self, player, initspeed, frames):
         """How far a character will slide in the given number of frames
 
         Args:
-            character_state (gamestate.PlayerState): The player we're interested in
+            player (gamestate.PlayerState): The player we're interested in
             initspeed (float): The character's starting speed
             frames (int): Maximum number of frames to calculate for
         """
-        normalfriction = self.characterdata[character_state.character]["Friction"]
+        normalfriction = self.characterdata[player.character]["Friction"]
         friction = normalfriction
         totaldistance = 0
-        walkspeed = self.characterdata[character_state.character]["MaxWalkSpeed"]
+        walkspeed = self.characterdata[player.character]["MaxWalkSpeed"]
         # Just the speed, not direction
         absspeed = abs(initspeed)
         multiplier = 1
         for i in range(frames):
             # Special case for these two damn animations, for some reason. Thanks melee
-            if character_state.action in [Action.TECH_MISS_UP]:
-                if character_state.action_frame + i < 18:
+            if player.action in [Action.TECH_MISS_UP]:
+                if player.action_frame + i < 18:
                     friction = .051
                     multiplier = 1
                 else:
@@ -966,12 +968,55 @@ class FrameData:
 
         return totaldistance
 
-    def _ccw(A,B,C):
+    def _ccw(self, A,B,C):
+        """Check if points A, B, and C are in counterclockwise order."""
         return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
 
-    def _intersect(A,B,C,D):
+    def _on_segment(self, p, q, r):
+        """Check if point q lies on the segment pr."""
+        return min(p[0], r[0]) <= q[0] <= max(p[0], r[0]) and min(p[1], r[1]) <= q[1] <= max(p[1], r[1])
+
+    def _collinear(self, A, B, C):
+        """Check if points A, B, and C are collinear"""
+        return (B[1] - A[1]) * (C[0] - A[0]) == (C[1] - A[1]) * (B[0] - A[0])
+
+    def _intersect(self, A,B,C,D):
         """Return true if line segments AB and CD intersect"""
-        return FrameData._ccw(A,C,D) != FrameData._ccw(B,C,D) and FrameData._ccw(A,B,C) != FrameData._ccw(A,B,D)
+        if self._ccw(A, C, D) != self._ccw(B, C, D) and self._ccw(A, B, C) != self._ccw(A, B, D):
+            return True
+        
+        if self._collinear(A, B, C) and self._on_segment(A, C, B):
+            return True
+        
+        if self._collinear(A, B, D) and self._on_segment(A, D, B):
+            return True
+        
+        if self._collinear(C, D, A) and self._on_segment(C, A, D):
+            return True
+        
+        if self._collinear(C, D, B) and self._on_segment(C, B, D):
+            return True
+        
+        return False
+
+    def get_platforms(self, gamestate):
+        # Get list of all platforms, tuples of (height, left, right)
+        platforms = []
+        stage = gamestate.stage
+        if stage == enums.Stage.NO_STAGE:
+            return platforms
+        platforms.append((0, -stages.EDGE_GROUND_POSITION[stage], stages.EDGE_GROUND_POSITION[stage]))
+        top_plat = stages.top_platform_position(stage)
+        if top_plat[0] is not None:
+            platforms.append(top_plat)
+        left_plat = stages.left_platform_position(gamestate)
+        if left_plat[0] is not None:
+            platforms.append(left_plat)
+        right_plat = stages.right_platform_position(gamestate)
+        if right_plat[0] is not None:
+            platforms.append(right_plat)
+        
+        return platforms
 
     def project_hit_location(self, gamestate, player, frames=-1):
         """How far does the given character fly, assuming they've been hit?
@@ -991,21 +1036,16 @@ class FrameData:
         Returns:
             (float, float, int): x, y coordinates of the place the character will end up at the end of hitstun, plus frames until that position
         """
-        stage = gamestate.stage
         speed_x, speed_y_attack, speed_y_self = player.speed_x_attack, player.speed_y_attack, player.speed_y_self
         position_x, position_y = player.position.x, player.position.y
         termvelocity = self.characterdata[player.character]["TerminalVelocity"]
         gravity = self.characterdata[player.character]["Gravity"]
+        
+        if player.on_ground and not self.is_hit(player):
+            gravity = 0
 
         # Get list of all platforms, tuples of (height, left, right)
-        platforms = []
-        platforms.append((0, -stages.EDGE_GROUND_POSITION[stage], stages.EDGE_GROUND_POSITION[stage]))
-        left_plat = stages.left_platform_position(gamestate)
-        if left_plat[0] is not None:
-            platforms.append(left_plat)
-        right_plat = stages.right_platform_position(gamestate)
-        if right_plat[0] is not None:
-            platforms.append(right_plat)
+        platforms = self.get_platforms(gamestate)
 
         angle = math.atan2(speed_x, speed_y_attack)
         horizontal_decay = abs(0.051 * math.cos(-angle + (math.pi/2)))
@@ -1019,6 +1059,19 @@ class FrameData:
 
         # Always quit out after 180 iterations just in case. So we don't accidentally infinite loop here
         failsafe = 180
+        
+        # Check if initial frame is already intersecting with a platform
+        for platform in platforms:
+            # We have two line segments. Check if they intersect
+            #   AB is platform, CD is character
+            A = (platform[1], platform[0])
+            B = (platform[2], platform[0])
+            C = (position_x, position_y + 8)
+            D = (position_x+speed_x, position_y + speed_y_attack + speed_y_self)
+            
+            if self._intersect(A, B, C, D):
+                # speed_x/2 to just assume we intersect half way through. This will be wrong, but close enough
+                return (position_x+(speed_x/2), platform[0], 181-failsafe)
 
         while frames_left > 0 and failsafe > 0:
             # Check if the character will hit a platform
@@ -1027,9 +1080,10 @@ class FrameData:
                 #   AB is platform, CD is character
                 A = (platform[1], platform[0])
                 B = (platform[2], platform[0])
-                C = (position_x, position_y + player.ecb.bottom.y)
-                D = (position_x+speed_x, position_y + player.ecb.bottom.y + speed_y_attack + speed_y_self)
-                if FrameData._intersect(A, B, C, D):
+                C = (position_x, position_y + 8)
+                D = (position_x+speed_x, position_y + speed_y_attack + speed_y_self)
+                
+                if self._intersect(A, B, C, D):
                     # speed_x/2 to just assume we intersect half way through. This will be wrong, but close enough
                     return (position_x+(speed_x/2), platform[0], 181-failsafe)
 
@@ -1192,7 +1246,6 @@ class FrameData:
             not player.action == Action.DEAD_FALL and
             not player.action == Action.SPECIAL_FALL_FORWARD and
             not player.action == Action.SPECIAL_FALL_BACK and
-            not player.action == Action.LANDING_SPECIAL and
             not player.action == Action.TECH_MISS_UP and
             not player.action == Action.GROUND_GETUP and
             not player.action == Action.GROUND_ROLL_FORWARD_UP and
@@ -1247,6 +1300,23 @@ class FrameData:
             player.action == Action.DEAD_UP
         )
 
+    def is_thrown(self, player):
+        """Whether the player is in a thrown state"""
+        return (
+            player.action == Action.THROWN_FORWARD or
+            player.action == Action.THROWN_BACK or
+            player.action == Action.THROWN_UP or
+            player.action == Action.THROWN_DOWN or
+            player.action == Action.THROWN_DOWN_2 or
+            player.action == Action.THROWN_KIRBY_STAR or
+            player.action == Action.THROWN_COPY_STAR or
+            player.action == Action.THROWN_KIRBY or
+            player.action == Action.BURY or
+            player.action == Action.DAMAGE_BIND or
+            player.action == Action.THROWN_MEWTWO or
+            player.action == Action.THROWN_MEWTWO_AIR
+        )
+
     def is_damaged(self, player):
         """Whether the player is in a damage state"""
         return (
@@ -1273,42 +1343,42 @@ class FrameData:
             player.action == Action.DAMAGE_GROUND or
             player.action == Action.PUMMELED_HIGH or
             player.action == Action.GRAB_PUMMELED or
-            player.action == Action.THROWN_FORWARD or
-            player.action == Action.THROWN_BACK or
-            player.action == Action.THROWN_UP or
-            player.action == Action.THROWN_DOWN or
-            player.action == Action.THROWN_DOWN_2 or
-            player.action == Action.THROWN_KIRBY_STAR or
-            player.action == Action.THROWN_COPY_STAR or
-            player.action == Action.THROWN_KIRBY or
-            player.action == Action.BURY or
             player.action == Action.DAMAGE_SONG or
             player.action == Action.DAMAGE_SONG_WAIT or
             player.action == Action.DAMAGE_SONG_RV or
             player.action == Action.DAMAGE_BIND or
-            player.action == Action.THROWN_MEWTWO or
-            player.action == Action.THROWN_MEWTWO_AIR or
             player.action == Action.DAMAGE_ICE or
-            player.action == Action.DAMAGE_ICE_JUMP
+            player.action == Action.DAMAGE_ICE_JUMP or
+            self.is_thrown(player)
         )
-        
+    
+    def is_grabbed(self, player):
+        """Whether the player is in a grabbed state"""
+        return (
+            player.action == Action.GRABBED or
+            player.action == Action.GRAB_PULL or
+            player.action == Action.GRAB_ESCAPE or
+            player.action == Action.GRAB_JUMP or
+            player.action == Action.GRAB_NECK or
+            player.action == Action.GRAB_FOOT or
+            player.action == Action.GRABBED_WAIT_HIGH
+        )
+    
+    def has_misteched(self, player):
+        return (player.action == Action.TECH_MISS_UP or
+                player.action == Action.TECH_MISS_DOWN or
+                player.action == Action.LYING_GROUND_UP or
+                player.action == Action.LYING_GROUND_DOWN)
+    
     def is_hit(self, player):
         """Whether the player is in a hit state"""
         return (
             self.is_damaged(player) or
             player.action == Action.SHIELD_STUN or
-            player.action == Action.GRABBED_WAIT_HIGH or
-            player.action == Action.GRAB_PULL or
-            player.action == Action.GRABBED or
-            player.action == Action.GRAB_ESCAPE or
-            player.action == Action.GRAB_JUMP or
-            player.action == Action.GRAB_NECK or
-            player.action == Action.GRAB_FOOT or
             player.action == Action.BURY_WAIT or
             player.action == Action.BURY_JUMP or
             player.action == Action.DOWN_REFLECT or
             player.action == Action.DOWN_B_STUN or
-            player.hitlag_left or
             (player.hitstun_frames_left and
              (self.is_damaged(player) or
               player.action == Action.TUMBLING))
@@ -1354,7 +1424,11 @@ class FrameData:
             player.action == Action.GROUND_ATTACK_UP or
             player.action == Action.GETUP_ATTACK or
             player.action == Action.EDGE_ATTACK_SLOW or
-            player.action == Action.EDGE_ATTACK_QUICK
+            player.action == Action.EDGE_ATTACK_QUICK or
+            player.action == Action.THROW_UP or
+            player.action == Action.THROW_DOWN or
+            player.action == Action.THROW_BACK or
+            player.action == Action.THROW_FORWARD
         )
         
     def is_special_attacking(self, player):
@@ -1569,4 +1643,22 @@ class FrameData:
             player.action == Action.WARP_STAR_FALL or
             player.action == Action.HAMMER_FALL or
             player.action == Action.PARASOL_FALLING
+        )
+    
+    def is_item_pulling(self, player):
+        """Whether the player is pulling out an item"""
+        player_char = player.character
+        player_action = player.action
+        return (
+            player_action == Action.ITEM_PICKUP_LIGHT or
+            player_action == Action.ITEM_PICKUP_HEAVY or
+            (
+                player_char == Character.LINK and
+                player_action == Action.SWORD_DANCE_1_AIR or
+                player_action == Action.SWORD_DANCE_2_HIGH_AIR
+            ) or
+            (
+                player_char == Character.PEACH and
+                player_action == Action.SWORD_DANCE_3_HIGH
+            )
         )

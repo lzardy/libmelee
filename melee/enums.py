@@ -267,10 +267,11 @@ class Button(Enum):
     BUTTON_C = "C"
 
 class Analog(Enum):
-    UP = 0
-    LEFT = 1
-    DOWN = 2
-    RIGHT = 3
+    NEUTRAL = 0
+    UP = 1
+    LEFT = 2
+    DOWN = 3
+    RIGHT = 4
 
 class Action(Enum):
     """ The in-game action (or animation) a character can be in

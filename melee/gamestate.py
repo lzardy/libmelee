@@ -73,7 +73,7 @@ class GameState(object):
 class PlayerState(object):
     """ Represents the state of a single player """
     __slots__ = ('character', 'character_selected', 'x', 'y', 'percent', 'shield_strength', 'stock', 'facing',
-                 'action', 'action_frame', 'invulnerable', 'invulnerability_left', 'hitlag_left', 'hitstun_frames_left',
+                 'action', 'action_frame', 'invulnerable', 'hitlag_left', 'hitstun_frames_left',
                  'jumps_left', 'on_ground', 'speed_air_x_self', 'speed_y_self', 'speed_x_attack', 'speed_y_attack',
                  'speed_ground_x_self', 'cursor_x', 'cursor_y', 'coin_down', 'controller_status', 'off_stage', 'iasa',
                  'moonwalkwarning', 'controller_state', 'ecb_bottom', 'ecb_top', 'ecb_left', 'ecb_right',
@@ -111,8 +111,6 @@ class PlayerState(object):
         """(int): What frame of the Action is the character in? Indexed from 1."""
         self.invulnerable = False
         """(bool): Is the player invulnerable?"""
-        self.invulnerability_left = 0
-        """(int): How many frames of invulnerability are left."""
         self.hitlag_left = 0
         """(bool): How many more frames of hitlag there is"""
         self.hitstun_frames_left = 0
