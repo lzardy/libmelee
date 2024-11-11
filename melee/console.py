@@ -279,7 +279,7 @@ class Console:
         if self.is_dolphin:
             self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port)
             if self.path:
-                self.is_mainline = is_mainline_dolphin(path)
+                self.is_mainline = False
 
                 if self.is_mainline and self.use_exi_inputs:
                     raise ValueError('EXI inputs not supported on mainline')

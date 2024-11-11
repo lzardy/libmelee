@@ -586,7 +586,7 @@ class FrameData:
             if player.action not in [Action.TECH_MISS_UP, Action.TECH_MISS_DOWN, Action.LYING_GROUND_UP, Action.LYING_GROUND_DOWN]:
                 # Adjust the position to account for the fact that we can't roll off the platform
                 side_platform_height, side_platform_left, side_platform_right = stages.side_platform_position(player.position.x > 0, gamestate)
-                top_platform_height, top_platform_left, top_platform_right = stages.top_platform_position(stage)
+                top_platform_height, top_platform_left, top_platform_right = stages.top_platform_position(gamestate)
                 if player.position.y < 5:
                     position = min(position, stages.EDGE_GROUND_POSITION[stage])
                     position = max(position, -stages.EDGE_GROUND_POSITION[stage])
@@ -1006,7 +1006,7 @@ class FrameData:
         if stage == enums.Stage.NO_STAGE:
             return platforms
         platforms.append((0, -stages.EDGE_GROUND_POSITION[stage], stages.EDGE_GROUND_POSITION[stage]))
-        top_plat = stages.top_platform_position(stage)
+        top_plat = stages.top_platform_position(gamestate)
         if top_plat[0] is not None:
             platforms.append(top_plat)
         left_plat = stages.left_platform_position(gamestate)
@@ -1662,3 +1662,10 @@ class FrameData:
                 player_action == Action.SWORD_DANCE_3_HIGH
             )
         )
+    
+    def is_jumping(self, player):
+        return (player.action == Action.KNEE_BEND or
+                player.action == Action.JUMPING_FORWARD or
+                player.action == Action.JUMPING_BACKWARD or
+                player.action == Action.JUMPING_ARIAL_FORWARD or
+                player.action == Action.JUMPING_ARIAL_BACKWARD)
