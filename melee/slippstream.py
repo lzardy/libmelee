@@ -14,6 +14,8 @@ import multiprocessing as mp
 from multiprocessing.connection import Connection
 from multiprocessing.synchronize import Event
 
+from melee.enums import Stage
+
 # pylint: disable=too-few-public-methods
 class EventType(Enum):
     """ Replay event types """
@@ -26,6 +28,22 @@ class EventType(Enum):
     FRAME_START = 0x3a
     ITEM_UPDATE = 0x3b
     FRAME_BOOKEND = 0x3c
+    GECKO_LIST = 0x3d
+    FOD_INFO = 0x3f
+    DL_INFO = 0x40
+    PS_INFO = 0x41
+    
+    BONES = 0x60
+    
+    # This is not used in-game. All menu events have this type.
+    # Due to a bug, dolphin sometimes sends these before the game has ended.
+    MENU_EVENT = 0x3e
+
+EVENT_TO_STAGE = {
+    EventType.FOD_INFO: Stage.FOUNTAIN_OF_DREAMS,
+    EventType.DL_INFO: Stage.DREAMLAND,
+    EventType.PS_INFO: Stage.POKEMON_STADIUM,
+}
 
 class CommType(Enum):
     """ Types of SlippiComm messages """
@@ -148,9 +166,6 @@ class SlippstreamClient:
         self.timestamp = ""
         self.consoleNick = ""
         self.players = {}
-        self.now_frame_time = 0
-        self.last_frame_time = 0
-        self.server = None
 
     def shutdown(self):
         """ Close down the socket and connection to the console """

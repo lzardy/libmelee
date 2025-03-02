@@ -6,9 +6,11 @@ is your method to start and stop Dolphin, set configs, and get the latest GameSt
 
 from collections import defaultdict
 import dataclasses
+import enum
 from typing import Optional
 from packaging import version
 
+import logging
 import time
 import os
 import stat
@@ -26,7 +28,7 @@ import tempfile
 from melee import enums
 from melee.enums import Action
 from melee.gamestate import GameState, Projectile, PlayerState
-from melee.slippstream import SlippstreamClient, EventType
+from melee.slippstream import SlippstreamClient, EventType, EVENT_TO_STAGE
 from melee.slpfilestreamer import SLPFileStreamer
 from melee import stages
 
@@ -94,12 +96,60 @@ def get_exe_path(path: str) -> str:
 
     return os.path.join(*exe_path, exe_name)
 
-def is_mainline_dolphin(path: str) -> bool:
+class DolphinBuild(enum.Enum):
+    NETPLAY = enum.auto()
+    PLAYBACK = enum.auto()
+    EXI_AI = enum.auto()
+
+_STRING_TO_BUILD = {
+    'Playback': DolphinBuild.PLAYBACK,
+    'ExiAI': DolphinBuild.EXI_AI,
+}
+
+@dataclasses.dataclass
+class DolphinVersion:
+    mainline: bool
+    version: str
+    build: DolphinBuild
+
+def get_dolphin_version(path: str) -> DolphinVersion:
     exe_path = get_exe_path(path)
-    # Ishiiruka actually gives returncode -1 and puts
-    # "Faster Melee - Slippi (3.4.0)" in stderr!
     result = subprocess.run([exe_path, '--version'], capture_output=True)
-    return result.stdout.find(b'mainline') != -1
+
+    # Ishiiruka actually gives returncode 1 and puts
+    # "Faster Melee - Slippi (3.4.0)" in stderr!
+    output = result.stdout if result.returncode == 0 else result.stderr
+    output = output.decode().strip()
+
+    # Mainline versions look like "4.0.0-mainline-beta.4"
+    if output.find('mainline') != -1:
+        version = output.split('-')[0]
+        return DolphinVersion(
+            mainline=True,
+            version=version,
+            # Mainline only supports netplay for now.
+            build=DolphinBuild.NETPLAY,
+        )
+
+    # Ishiiruka
+    contents = output.split(' - ')
+    if contents[0] != 'Faster Melee':
+        raise ValueError(f'Unexpected dolphin version {output}')
+
+    # "Slippi (VERSION)"
+    begin = contents[1].find('(') + 1
+    end = contents[1].find(')')
+    version = contents[1][begin:end]
+
+    if len(contents) == 2:
+        build = DolphinBuild.NETPLAY
+    else:
+        build_str = contents[2]
+        if build_str not in _STRING_TO_BUILD:
+            raise ValueError(f'Unexpected dolphin version {output}')
+        build = _STRING_TO_BUILD[build_str]
+
+    return DolphinVersion(False, version, build)
 
 @dataclasses.dataclass
 class DumpConfig:
@@ -127,7 +177,7 @@ class DumpConfig:
 
 # pylint: disable=too-many-instance-attributes
 class Console:
-    """The console object that represents your Dolphin / GameCube / SLP file
+    """The console object that represents your Dolphin / Wii / SLP file
     """
     def __init__(self,
                  path: Optional[str] = None,
@@ -137,23 +187,24 @@ class Console:
                  copy_home_directory: bool = True,
                  slippi_address: str = "127.0.0.1",
                  slippi_port: int = 51441,
-                 online_delay: int = 2,
+                 online_delay: int = 0,
                  blocking_input: bool = False,
-                 polling_mode: bool =False,
+                 polling_mode: bool = False,
                  polling_timeout: float = 0,
                  skip_rollback_frames: bool = True,
-                 allow_old_version=False,
+                 allow_old_version: bool = False,
                  logger=None,
-                 setup_gecko_codes=True,
-                 fullscreen=True,
-                 gfx_backend="",
-                 disable_audio=False,
+                 setup_gecko_codes: bool = True,
+                 fullscreen: bool = True,
+                 gfx_backend: str = "",
+                 disable_audio: bool = False,
                  overclock: Optional[float] = None,
                  emulation_speed: float = 1.0,
-                 save_replays=True,
-                 replay_dir=None,
+                 save_replays: bool = True,
+                 replay_dir: Optional[str] = None,
                  user_json_path: Optional[str] = None,
                  log_level: int = 3,  # WARN, see Source/Core/Common/Logging/Log.h
+                 log_types: list[str] = ['SLIPPI'],
                  infinite_time: bool = False,
                  use_exi_inputs=False,
                  enable_ffw=False,
@@ -171,7 +222,7 @@ class Console:
                 This is useful so instances don't interfere with each other.
             copy_home_directory (bool): Copy an existing home directory on the system.
                 Unset to get a fresh directory that doesn't depend on system state.
-            slippi_address (str): IP address of the Dolphin / gamecube to connect to.
+            slippi_address (str): IP address of the Dolphin / Wii to connect to.
             slippi_port (int): UDP port that slippi will listen on
             online_delay (int): How many frames of delay to apply in online matches
             blocking_input (bool): Should dolphin block waiting for bot input
@@ -202,19 +253,18 @@ class Console:
             use_exi_inputs (bool): Enable gecko code for exi dolphin inputs. This is
                 necessary for fast-forward mode which ignores dolphin's normal polling.
                 Must be used with a compatible Ishiiruka branch such as
-                https://github.com/altf4/Ishiiruka/tree/feature/ai-inputs-exi-pr
-                or https://github.com/vladfi1/slippi-Ishiiruka/tree/exi-ai. Note that
+                https://github.com/vladfi1/slippi-Ishiiruka/tree/exi-ai-rebase. Note that
                 this will likely be incompatible with netplay.
             enable_ffw (bool): Enable fast-forward mode. Useful for bot training. Must
                 have use_exi_inputs=True.
             dump_config (DumpConfig): Settings for video dumps.
         """
         self.logger = logger
-        self.system = system
+        self.is_dolphin = is_dolphin
         self.path = path
         self.dolphin_home_path = dolphin_home_path
         self.temp_dir = None
-        if tmp_home_directory and self.system =="dolphin":
+        if tmp_home_directory and self.is_dolphin:
             self.temp_dir = tempfile.mkdtemp(prefix='libmelee_')
             home_dir = self.temp_dir + "/User/"
             if copy_home_directory:
@@ -224,7 +274,7 @@ class Console:
         self.processingtime = 0
         self._frametimestamp = time.time()
         self.slippi_address = slippi_address
-        """(str): IP address of the Dolphin / gamecube to connect to."""
+        """(str): IP address of the Dolphin / Wii to connect to."""
         self.slippi_port = slippi_port
         """(int): UDP port of slippi server. Default 51441"""
         self.eventsize = [0] * 0x100
@@ -264,6 +314,7 @@ class Console:
         self.replay_dir = replay_dir
         self.user_json_path = user_json_path
         self.log_level = log_level
+        self.log_types = log_types
         self.infinite_time = infinite_time
         self.use_exi_inputs = use_exi_inputs
         if enable_ffw and not use_exi_inputs:
@@ -276,18 +327,22 @@ class Console:
         # Half-completed gamestate not yet ready to add to the list
         self._temp_gamestate = None
         self._process = None
-        assert(self.system in ["dolphin", "gamecube", "file"])
-        if self.system == "dolphin":
-            self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port, True)
+        if self.is_dolphin:
+            self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port)
             if self.path:
-                self.is_mainline = is_mainline_dolphin(path)
+                self.dolphin_version = get_dolphin_version(path)
+                self.is_mainline = self.dolphin_version.mainline
 
-                if self.is_mainline and self.use_exi_inputs:
-                    raise ValueError('EXI inputs not supported on mainline')
+                if gfx_backend == 'Null':
+                    if not (self.is_mainline or self.dolphin_version.build == DolphinBuild.EXI_AI):
+                        raise ValueError('Null video requires mainline or ExiAI Ishiiruka.')
+
+                if self.use_exi_inputs and self.dolphin_version.build != DolphinBuild.EXI_AI:
+                    raise ValueError(
+                        'EXI inputs require a custom dolphin build. '
+                        'See https://github.com/vladfi1/libmelee?tab=readme-ov-file#setup-instructions')
 
                 self._setup_home_directory()
-        elif self.system == "gamecube":
-            self._slippstream = SlippstreamClient(self.slippi_address, self.slippi_port, False)
         else:
             self._slippstream = SLPFileStreamer(self.path)
 
@@ -314,7 +369,7 @@ class Console:
                 self.characterdata[enums.Character(line["CharacterIndex"])] = line
 
     def connect(self):
-        """ Connects to the Slippi server (dolphin or gamecube).
+        """ Connects to the Slippi server (dolphin or wii).
 
         Returns:
             True is successful, False otherwise
@@ -366,7 +421,7 @@ class Console:
               dolphin was built. Only applies to mainline dolphin; Ishiiruka
               bakes the platform into the executable at compilation time.
         """
-        assert self.system == "dolphin" and self.path
+        assert self.is_dolphin and self.path
 
         exe_path = get_exe_path(self.path)
         command = [exe_path]
@@ -395,7 +450,7 @@ class Console:
         """ Stop the console.
 
         For Dolphin instances, this will kill the dolphin process.
-        For gamecubes and SLP files, it just shuts down our connection
+        For Wiis and SLP files, it just shuts down our connection
          """
         if self.path:
             self.connected = False
@@ -490,7 +545,7 @@ class Console:
         logger_config.set("Options", "WriteToFile", "True")
         logger_config.set("Options", "Verbosity", str(self.log_level))
 
-        for log_type in ['SLIPPI', 'VIDEO', 'FRAMEDUMP']:
+        for log_type in self.log_types:
             logger_config.set("Logs", log_type, "True")
 
         with open(logger_ini_path, 'w') as f:
@@ -621,32 +676,29 @@ class Console:
         while not frame_ended:
             message = self._slippstream.dispatch(
                 self._polling_mode, timeout=self._polling_timeout)
-            if message:
-                if message["type"] == "connect_reply":
-                    self.connected = True
-                    self.nick = message["nick"]
-                    self.version = message["version"]
-                    self.cursor = message["cursor"]
-
-                elif message["type"] == "game_event":
-                    if len(message["payload"]) > 0:
-                        if self.system == "dolphin":
-                            frame_ended = self.__handle_slippstream_events(base64.b64decode(message["payload"]), self._temp_gamestate)
-                        else:
-                            frame_ended = self.__handle_slippstream_events(message["payload"], self._temp_gamestate)
-
-                elif message["type"] == "menu_event":
-                    if len(message["payload"]) > 0:
-                        if self.system == "dolphin":
-                            self.__handle_slippstream_menu_event(base64.b64decode(message["payload"]), self._temp_gamestate)
-                        else:
-                            self.__handle_slippstream_menu_event(message["payload"], self._temp_gamestate)
-                        frame_ended = True
-
-                elif self._use_manual_bookends and message["type"] == "frame_end" and self._frame != -10000:
-                    frame_ended = True
-            else:
+            if message is None:
                 return None
+
+            if message["type"] == "connect_reply":
+                self.connected = True
+                self.nick = message["nick"]
+                self.version = message["version"]
+                self.cursor = message["cursor"]
+
+            elif message["type"] == "game_event":
+                if len(message["payload"]) > 0:
+                    if self.is_dolphin:
+                        frame_ended = self.__handle_slippstream_events(base64.b64decode(message["payload"]), self._temp_gamestate)
+                    else:
+                        frame_ended = self.__handle_slippstream_events(message["payload"], self._temp_gamestate)
+
+            elif message["type"] == "menu_event":
+                if len(message["payload"]) > 0:
+                    self.__handle_slippstream_menu_event(base64.b64decode(message["payload"]), self._temp_gamestate)
+                    frame_ended = True
+
+            elif self._use_manual_bookends and message["type"] == "frame_end" and self._frame != -10000:
+                frame_ended = True
 
         gamestate = self._temp_gamestate
         self._temp_gamestate = None
@@ -677,22 +729,24 @@ class Console:
         self._frametimestamp = time.time()
         return gamestate
 
-    def __handle_slippstream_events(self, event_bytes, gamestate: GameState):
+    def __handle_slippstream_events(self, event_bytes: bytes, gamestate: GameState):
         """ Handle a series of events, provided sequentially in a byte array """
         gamestate.menu_state = enums.Menu.IN_GAME
         while len(event_bytes) > 0:
-            # A null message type means that the rest of the data is padding
-            if event_bytes[0] == 0x00:
-                return True
-            event_size = self.eventsize[event_bytes[0]]
-            if len(event_bytes) < event_size:
-                print("WARNING: Something went wrong unpacking events. Data is probably missing")
-                print("\tDidn't have enough data for event")
-                return False
+            command_byte = event_bytes[0]
+
             try:
-                event_type = EventType(event_bytes[0])
+                event_type = EventType(command_byte)
             except ValueError:
+                logging.error("Got invalid event type: %s", command_byte)
                 import ipdb; ipdb.set_trace()
+
+            if event_type == EventType.MENU_EVENT:
+                # https://github.com/project-slippi/dolphin/issues/31
+                logging.error("Got a menu event in the middle of a frame. Continuing anyway.")
+                self.__handle_slippstream_menu_event(event_bytes, gamestate)
+                return True
+
             if event_type == EventType.PAYLOADS:
                 cursor = 0x2
                 payload_size = event_bytes[1]
@@ -703,8 +757,14 @@ class Console:
                     self.eventsize[command] = command_len+1
                     cursor += 3
                 event_bytes = event_bytes[payload_size + 1:]
+                continue
 
-            elif event_type == EventType.FRAME_START:
+            event_size = self.eventsize[command_byte]
+            if len(event_bytes) < event_size:
+                logging.warning("Something went wrong unpacking events. Data is probably missing")
+                return False
+
+            if event_type == EventType.FRAME_START:
                 event_bytes = event_bytes[event_size:]
 
             elif event_type == EventType.GAME_START:
@@ -749,10 +809,17 @@ class Console:
                 self.__item_update(gamestate, event_bytes)
                 event_bytes = event_bytes[event_size:]
 
+            elif event_type in [EventType.FOD_INFO, EventType.DL_INFO, EventType.PS_INFO]:
+                # TODO: Handle these events
+                event_bytes = event_bytes[event_size:]
+
+                expected_stage = EVENT_TO_STAGE[event_type]
+
+                if self._current_stage is not expected_stage:
+                    logging.warning("Got stage info for %s, but gamestate says %s", expected_stage, gamestate.stage)
+
             else:
-                print("WARNING: Something went wrong unpacking events. " + \
-                    "Data is probably missing")
-                print("\tGot invalid event type: ", event_bytes[0])
+                logging.error("Got an unhandled event type: %s", event_type)
                 return False
         return False
 
@@ -854,7 +921,7 @@ class Console:
         if self._use_manual_bookends:
             self._frame = gamestate.frame
 
-    def __post_frame(self, gamestate, event_bytes):
+    def __post_frame(self, gamestate: GameState, event_bytes):
         gamestate.stage = self._current_stage
         gamestate.is_teams = self._is_teams
         gamestate.frame = np.ndarray((1,), ">i", event_bytes, 0x1)[0]
@@ -969,12 +1036,12 @@ class Console:
         ecb_top_x = 0
         ecb_top_y = 0
         try:
-            ecb_top_x = np.ndarray((1,), ">f", event_bytes, 0x51)[0]
+            ecb_top_x = np.ndarray((1,), ">f", event_bytes, 0x4D)[0]
         except TypeError:
             ecb_top_x = 0
         # ECB Top edge, y
         try:
-            ecb_top_y = np.ndarray((1,), ">f", event_bytes, 0x55)[0]
+            ecb_top_y = np.ndarray((1,), ">f", event_bytes, 0x51)[0]
         except TypeError:
             ecb_top_y = 0
         playerstate.ecb.top.x = ecb_top_x
@@ -985,12 +1052,12 @@ class Console:
         ecb_bot_x = 0
         ecb_bot_y = 0
         try:
-            ecb_bot_x = np.ndarray((1,), ">f", event_bytes, 0x59)[0]
+            ecb_bot_x = np.ndarray((1,), ">f", event_bytes, 0x55)[0]
         except TypeError:
             ecb_bot_x = 0
         # ECB Bottom edge, y coord
         try:
-            ecb_bot_y = np.ndarray((1,), ">f", event_bytes, 0x5D)[0]
+            ecb_bot_y = np.ndarray((1,), ">f", event_bytes, 0x59)[0]
         except TypeError:
             ecb_bot_y = 0
         playerstate.ecb.bottom.x = ecb_bot_x
@@ -1001,12 +1068,12 @@ class Console:
         ecb_left_x = 0
         ecb_left_y = 0
         try:
-            ecb_left_x = np.ndarray((1,), ">f", event_bytes, 0x61)[0]
+            ecb_left_x = np.ndarray((1,), ">f", event_bytes, 0x5D)[0]
         except TypeError:
             ecb_left_x = 0
         # ECB left edge, y coord
         try:
-            ecb_left_y = np.ndarray((1,), ">f", event_bytes, 0x65)[0]
+            ecb_left_y = np.ndarray((1,), ">f", event_bytes, 0x61)[0]
         except TypeError:
             ecb_left_y = 0
         playerstate.ecb.left.x = ecb_left_x
@@ -1017,12 +1084,12 @@ class Console:
         ecb_right_x = 0
         ecb_right_y = 0
         try:
-            ecb_right_x = np.ndarray((1,), ">f", event_bytes, 0x69)[0]
+            ecb_right_x = np.ndarray((1,), ">f", event_bytes, 0x65)[0]
         except TypeError:
             ecb_right_x = 0
         # ECB right edge, y coord
         try:
-            ecb_right_y = np.ndarray((1,), ">f", event_bytes, 0x6D)[0]
+            ecb_right_y = np.ndarray((1,), ">f", event_bytes, 0x69)[0]
         except TypeError:
             ecb_right_y = 0
         playerstate.ecb.right.x = ecb_right_x
@@ -1030,16 +1097,6 @@ class Console:
         playerstate.ecb_right = (ecb_right_x, ecb_right_y)
         if self._use_manual_bookends:
             self._frame = gamestate.frame
-
-        # FoD platform heights
-        try:
-            gamestate._fod_platform_left = np.ndarray((1,), ">f", event_bytes, 0x71)[0]
-        except TypeError:
-            gamestate._fod_platform_left = 0
-        try:
-            gamestate._fod_platform_right = np.ndarray((1,), ">f", event_bytes, 0x75)[0]
-        except TypeError:
-            gamestate._fod_platform_right = 0
 
     def __frame_bookend(self, gamestate, event_bytes):
         self._prev_gamestate = gamestate
@@ -1117,6 +1174,7 @@ class Console:
             gamestate.players[2] = PlayerState()
             gamestate.players[3] = PlayerState()
             gamestate.players[4] = PlayerState()
+
         elif scene == 0x0202:
             gamestate.menu_state = enums.Menu.IN_GAME
         elif scene == 0x0001:
@@ -1129,8 +1187,6 @@ class Console:
             gamestate.players[4] = PlayerState()
         elif scene == 0x0000:
             gamestate.menu_state = enums.Menu.PRESS_START
-        elif scene == 0x0402:
-            gamestate.menu_state = enums.Menu.POSTGAME_SCORES
         else:
             gamestate.menu_state = enums.Menu.UNKNOWN_MENU
 
@@ -1272,14 +1328,14 @@ class Console:
             if gamestate.players[port].controller_status != enums.ControllerStatus.CONTROLLER_CPU:
                 gamestate.players[port].cpu_level = 0
 
-    def __fixframeindexing(self, gamestate):
+    def __fixframeindexing(self, gamestate: GameState):
         """ Melee's indexing of action frames is wildly inconsistent.
             Here we adjust all of the frames to be indexed at 1 (so math is easier)"""
         for _, player in gamestate.players.items():
             if player.action.value in self.zero_indices[player.character.value]:
                 player.action_frame = player.action_frame + 1
 
-    def __fixiasa(self, gamestate):
+    def __fixiasa(self, gamestate: GameState):
         """ The IASA flag doesn't set or reset for special attacks.
             So let's just set IASA to False for all non-A attacks.
         """
