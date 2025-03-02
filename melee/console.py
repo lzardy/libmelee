@@ -9,6 +9,7 @@ import dataclasses
 from typing import Optional
 from packaging import version
 
+import logging
 import time
 import os
 import stat
@@ -26,7 +27,7 @@ import tempfile
 from melee import enums
 from melee.enums import Action
 from melee.gamestate import GameState, Projectile, PlayerState
-from melee.slippstream import SlippstreamClient, EventType
+from melee.slippstream import SlippstreamClient, EventType, EVENT_TO_STAGE
 from melee.slpfilestreamer import SLPFileStreamer
 from melee import stages
 
@@ -671,19 +672,24 @@ class Console:
         self._frametimestamp = time.time()
         return gamestate
 
-    def __handle_slippstream_events(self, event_bytes, gamestate: GameState):
+    def __handle_slippstream_events(self, event_bytes: bytes, gamestate: GameState):
         """ Handle a series of events, provided sequentially in a byte array """
         gamestate.menu_state = enums.Menu.IN_GAME
         while len(event_bytes) > 0:
-            event_size = self.eventsize[event_bytes[0]]
-            if len(event_bytes) < event_size:
-                print("WARNING: Something went wrong unpacking events. Data is probably missing")
-                print("\tDidn't have enough data for event")
-                return False
+            command_byte = event_bytes[0]
+
             try:
-                event_type = EventType(event_bytes[0])
+                event_type = EventType(command_byte)
             except ValueError:
+                logging.error("Got invalid event type: %s", command_byte)
                 import ipdb; ipdb.set_trace()
+
+            if event_type == EventType.MENU_EVENT:
+                # https://github.com/project-slippi/dolphin/issues/31
+                logging.error("Got a menu event in the middle of a frame. Continuing anyway.")
+                self.__handle_slippstream_menu_event(event_bytes, gamestate)
+                return True
+
             if event_type == EventType.PAYLOADS:
                 cursor = 0x2
                 payload_size = event_bytes[1]
@@ -694,8 +700,14 @@ class Console:
                     self.eventsize[command] = command_len+1
                     cursor += 3
                 event_bytes = event_bytes[payload_size + 1:]
+                continue
 
-            elif event_type == EventType.FRAME_START:
+            event_size = self.eventsize[command_byte]
+            if len(event_bytes) < event_size:
+                logging.warning("Something went wrong unpacking events. Data is probably missing")
+                return False
+
+            if event_type == EventType.FRAME_START:
                 event_bytes = event_bytes[event_size:]
 
             elif event_type == EventType.GAME_START:
@@ -740,10 +752,17 @@ class Console:
                 self.__item_update(gamestate, event_bytes)
                 event_bytes = event_bytes[event_size:]
 
+            elif event_type in [EventType.FOD_INFO, EventType.DL_INFO, EventType.PS_INFO]:
+                # TODO: Handle these events
+                event_bytes = event_bytes[event_size:]
+
+                expected_stage = EVENT_TO_STAGE[event_type]
+
+                if self._current_stage is not expected_stage:
+                    logging.warning("Got stage info for %s, but gamestate says %s", expected_stage, gamestate.stage)
+
             else:
-                print("WARNING: Something went wrong unpacking events. " + \
-                    "Data is probably missing")
-                print("\tGot invalid event type: ", event_bytes[0])
+                logging.error("Got an unhandled event type: %s", event_type)
                 return False
         return False
 
@@ -845,7 +864,7 @@ class Console:
         if self._use_manual_bookends:
             self._frame = gamestate.frame
 
-    def __post_frame(self, gamestate, event_bytes):
+    def __post_frame(self, gamestate: GameState, event_bytes):
         gamestate.stage = self._current_stage
         gamestate.is_teams = self._is_teams
         gamestate.frame = np.ndarray((1,), ">i", event_bytes, 0x1)[0]

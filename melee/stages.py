@@ -96,7 +96,8 @@ def left_platform_position(gamestate):
     if gamestate.stage == enums.Stage.DREAMLAND:
         return (30.14219856262207, -61.39289855957031, -31.725400924682617)
     if gamestate.stage == enums.Stage.FOUNTAIN_OF_DREAMS:
-        return (gamestate._fod_platform_left, -49.5, -21)
+        return (None, None, None)
+        # return (gamestate._fod_platform_left, -49.5, -21)
     if gamestate.stage == enums.Stage.YOSHIS_STORY:
         return (23.450098037719727, -59.5, -28.0)
     return (None, None, None)
@@ -119,7 +120,8 @@ def right_platform_position(gamestate):
     if gamestate.stage == enums.Stage.DREAMLAND:
         return (30.242599487304688, 31.70359992980957, 63.074501037597656)
     if gamestate.stage == enums.Stage.FOUNTAIN_OF_DREAMS:
-        return (gamestate._fod_platform_right, 49.5, 21)
+        return (None, None, None)
+        # return (gamestate._fod_platform_right, 49.5, 21)
     if gamestate.stage == enums.Stage.YOSHIS_STORY:
         return (23.450098037719727, 28.0, 59.5)
     return (None, None, None)

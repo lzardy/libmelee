@@ -999,13 +999,30 @@ class FrameData:
         
         return False
 
-    def get_platforms(self, gamestate):
+    def get_platforms(self, gamestate, reference_pos=None):
         # Get list of all platforms, tuples of (height, left, right)
         platforms = []
         stage = gamestate.stage
         if stage == enums.Stage.NO_STAGE:
             return platforms
-        platforms.append((0, -stages.EDGE_GROUND_POSITION[stage], stages.EDGE_GROUND_POSITION[stage]))
+        
+        height = 0
+        if stage == enums.Stage.FOUNTAIN_OF_DREAMS:
+            height = 0.002875
+            slope_start = 51.1992
+            slope_end = 53.633595
+            slope_top = 0.623875
+        elif stage == enums.Stage.YOSHIS_STORY:
+            slope_start = 39.2005
+        if reference_pos is not None and stage in [enums.Stage.FOUNTAIN_OF_DREAMS, enums.Stage.YOSHIS_STORY]:
+            reference_x = abs(reference_pos[0])
+            if reference_x > slope_start:
+                if stage == enums.Stage.FOUNTAIN_OF_DREAMS:
+                    # calc_slope = (slope_top - height) / (slope_end - slope_start)
+                    height = slope_top
+                elif stage == enums.Stage.YOSHIS_STORY:
+                    height = -0.208339309495 * (reference_x - slope_start) + height
+        platforms.append((height, -stages.EDGE_GROUND_POSITION[stage], stages.EDGE_GROUND_POSITION[stage]))
         top_plat = stages.top_platform_position(gamestate)
         if top_plat[0] is not None:
             platforms.append(top_plat)
@@ -1018,7 +1035,69 @@ class FrameData:
         
         return platforms
 
-    def project_hit_location(self, gamestate, player, frames=-1):
+    def get_closest_platform(self, gamestate, position, check_below=True):
+        if gamestate.stage == enums.Stage.NO_STAGE:
+            return None
+        
+        nearest_dist = 1000
+        nearest_platform = None
+        below_dist = 1000
+        below_platform = None
+        for platform in self.get_platforms(gamestate, position):
+            left_edge = (platform[1], platform[0])
+            right_edge = (platform[2], platform[0])
+            
+            if left_edge[0] is None:
+                continue
+            
+            xdist = position[0] - left_edge[0]
+            ydist = position[1] - left_edge[1]
+            dist = math.sqrt((xdist**2) + (ydist**2))
+            if dist < nearest_dist:
+                nearest_dist = dist
+                width = right_edge[0] - left_edge[0]
+                nearest_platform = (left_edge[0] + width/2, left_edge[1], width)
+            if left_edge[1] <= position[1] and dist < below_dist:
+                below_dist = dist
+                below_platform = (left_edge[0] + width/2, left_edge[1], width)
+                        
+        if check_below:
+            return below_platform
+            
+        return nearest_platform
+    
+    def get_closest_edge(self, gamestate, position, check_below=True):
+        if gamestate.stage == enums.Stage.NO_STAGE:
+            return None
+        
+        nearest_dist = 1000
+        nearest_edge = (None, 0)
+        below_edge = (None, 0)
+        below_dist = 1000
+        for platform in self.get_platforms(gamestate):
+            for i in range(1, len(platform)):
+                edge_type = -1 if i == 1 else 1
+                edge = (platform[i], platform[0])
+                
+                if edge[0] is None:
+                    continue
+                
+                xdist = position[0] - edge[0]
+                ydist = position[1] - edge[1]
+                dist = math.sqrt((xdist**2) + (ydist**2))
+                if dist < nearest_dist:
+                    nearest_dist = dist
+                    nearest_edge = (edge, edge_type)
+                if edge[1] <= position[1] and dist < below_dist:
+                    below_dist = dist
+                    below_edge = (edge, edge_type)
+                        
+        if check_below:
+            return below_edge
+            
+        return nearest_edge
+
+    def project_hit_location(self, gamestate, player, frames=-1, y_margin=0.0, collide_below_platforms=False):
         """How far does the given character fly, assuming they've been hit?
             Only considers air-movement, not ground sliding.
             Projection ends if hitstun ends, or if a platform is encountered
@@ -1066,7 +1145,7 @@ class FrameData:
             #   AB is platform, CD is character
             A = (platform[1], platform[0])
             B = (platform[2], platform[0])
-            C = (position_x, position_y + 8)
+            C = (position_x, position_y + y_margin)
             D = (position_x+speed_x, position_y + speed_y_attack + speed_y_self)
             
             if self._intersect(A, B, C, D):
@@ -1076,11 +1155,15 @@ class FrameData:
         while frames_left > 0 and failsafe > 0:
             # Check if the character will hit a platform
             for platform in platforms:
+                # Collisions with platforms can only happen from above
+                if not collide_below_platforms and position_y < platform[0]:
+                    continue
+                
                 # We have two line segments. Check if they intersect
                 #   AB is platform, CD is character
                 A = (platform[1], platform[0])
                 B = (platform[2], platform[0])
-                C = (position_x, position_y + 8)
+                C = (position_x, position_y + y_margin)
                 D = (position_x+speed_x, position_y + speed_y_attack + speed_y_self)
                 
                 if self._intersect(A, B, C, D):

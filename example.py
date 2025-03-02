@@ -66,7 +66,9 @@ class KBController():
     gamestate = None
     l_cancel = False
     force_tilt = False
+    force_tilt_platform = False
     edge_cancels = False
+    character_int = 0
     
     def __init__(self, input_config_path):
         self.cfg_path = input_config_path
@@ -139,6 +141,8 @@ class KBController():
         self.config.set(self.section, 'Ledge Dash', 'm')
         self.config.set(self.section, 'Character Specific Attack', 'a')
         self.config.set(self.section, 'Auto Edgecancel', 'e')
+        self.config.set(self.section, '')
+        # self.config.set(self.section, 'Increment Character', '0')
         with open(self.cfg_path, 'w') as configfile:
             self.config.write(configfile)
 
@@ -584,16 +588,26 @@ class KBController():
         if stick != melee.Button.BUTTON_C:
             x, y = self.apply_tilt_mod(x, y)
 
-            if self.force_tilt or self.hotkeys_state[9] or self.hotkeys_state[10] or self.hotkeys_state[12]:
+            if self.force_tilt or self.force_tilt_platform or self.hotkeys_state[9] or self.hotkeys_state[10] or self.hotkeys_state[12]:
                 # Modify stick values to force tilts
-                if x < 0.1575:
-                    x = 0.1575
-                elif x > 0.8425:
-                    x = 0.8425
-                if y < 0.165:
-                    y = 0.165
-                elif y > 0.825:
-                    y = 0.825
+                if self.force_tilt_platform:
+                    if x < 0.125:
+                        x = 0.125
+                    elif x > 0.8725:
+                        x = 0.8725
+                    if y < 0.125:
+                        y = 0.125
+                    elif y > 0.83:
+                        y = 0.83
+                else:
+                    if x < 0.1575:
+                        x = 0.1575
+                    elif x > 0.8425:
+                        x = 0.8425
+                    if y < 0.165:
+                        y = 0.165
+                    elif x > 0.83:
+                        x = 0.83
         
         return (x, y)
 
@@ -649,11 +663,11 @@ class KBController():
         })
         # Add the input to the reserved set
         if input_type == 'button':
-            self.reserved_inputs.add(value)
+            self.reserved_inputs.add((value, start_frame))
         elif input_type == 'stick':
-            self.reserved_inputs.add(value['stick'])
+            self.reserved_inputs.add((value['stick'], start_frame))
         elif input_type == 'shoulder':
-            self.reserved_inputs.add(melee.Button.BUTTON_L)  # Assuming L shoulder for simplicity
+            self.reserved_inputs.add((melee.Button.BUTTON_L, start_frame))  # Assuming L shoulder for simplicity
         
     def process_and_clean_input_queue(self, current_frame):
         new_queue = []
@@ -666,11 +680,11 @@ class KBController():
             if current_frame >= input['end_frame'] and input['end_frame'] > 0:
                 self.release_input(input)
                 if input['type'] == 'button':
-                    self.reserved_inputs.discard(input['value'])
+                    self.reserved_inputs.discard((input['value'], input['start_frame']))
                 elif input['type'] == 'stick':
-                    self.reserved_inputs.discard(input['value']['stick'])
+                    self.reserved_inputs.discard((input['value']['stick'], input['start_frame']))
                 elif input['type'] == 'shoulder':
-                    self.reserved_inputs.discard(melee.Button.BUTTON_L)
+                    self.reserved_inputs.discard((melee.Button.BUTTON_L, input['start_frame']))
                 continue
                 
             if current_frame < input['end_frame']:
@@ -685,8 +699,10 @@ class KBController():
         # Skip inputs only if they are in the reserved set
         if self.gamestate.frame > 0:
             button = self.get_hotkey_button(num)
-            if button and button[0] in self.reserved_inputs:
-                return
+            if button:
+                for reserved_button, _ in self.reserved_inputs:
+                    if reserved_button == button[0]:
+                        return
         # Turbo will handle our presses and releases
         if self.hotkeys_state[27] and num != 27:
             return
@@ -768,7 +784,7 @@ class KBController():
     def handle_l_cancel(self, current_frame):
         if self.l_cancel:
             if current_frame % 6 == 0:
-                self.human_press_shoulder()
+                self.human_press_shoulder(value=0.43)
             elif current_frame % 6 == 1:
                 self.human_release_shoulder()
         elif self.inputs_reserved == 0:
@@ -931,9 +947,9 @@ def can_ledgefall(kb_controller):
            not kb_controller.hotkeys_state[left_hotkey] and
            not kb_controller.hotkeys_state[right_hotkey])
 
-def update_player_info(gamestate, local_port, opponent_ports, alive, costume):
+def update_player_info(gamestate, local_port, opponent_ports, alive, costume, character):
     if local_port not in gamestate.players or len(opponent_ports) == 0 and alive:
-        local_port = get_target_player(gamestate, 'SOUL#127') or melee.gamestate.port_detector(gamestate, Character.CPTFALCON, costume)
+        local_port = get_target_player(gamestate, 'SOUL#127') or melee.gamestate.port_detector(gamestate, character, costume)
         if local_port not in gamestate.players:
             print("Failed to find player.")
             alive = False
@@ -962,13 +978,10 @@ def handle_l_cancel(kb_controller, player, framedata):
         is_attacking)
     )
 
-def queue_turn(kb_controller, new_facing, run_frames=0, set_x=0.0, set_y=0.0, delay=0, use_current_frame=False, cstick=False):
+def queue_turn(kb_controller, new_facing, run_frames=0, set_x=0.0, set_y=0.0, delay=0, cstick=False):
     current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
     
     current_frame += delay
-    
-    if use_current_frame:
-        current_frame -= 1
     
     stick_button = Button.BUTTON_MAIN
     if cstick:
@@ -1033,14 +1046,18 @@ def queue_wavedash(kb_controller, player, facing=0, set_x=0, set_y=0, do_jump=Tr
     if do_jump and player.on_ground and not player.action == Action.KNEE_BEND:
         queue_shorthop(kb_controller, delay=delay)
         local_char = player.character
-        if local_char == Character.CPTFALCON:
-            current_frame += 3
+        if local_char == Character.FALCO:
+            current_frame += 5
         elif local_char == Character.GANONDORF:
+            current_frame += 6
+        elif local_char == Character.LINK:
+            current_frame += 6
+        elif local_char == Character.ROY:
             current_frame += 5
         elif local_char == Character.SAMUS:
-            current_frame += 2
+            current_frame += 3
         elif local_char == Character.SHEIK:
-            current_frame += 2
+            current_frame += 3
         else:
             current_frame += 4
     
@@ -1070,11 +1087,11 @@ def queue_wavedash(kb_controller, player, facing=0, set_x=0, set_y=0, do_jump=Tr
     if set_y != 0:
         new_y = set_y
     
-    kb_controller.queue_input('stick', {'stick': Button.BUTTON_MAIN, 'x': new_x, 'y': new_y}, current_frame + 1, current_frame + 3)
-    kb_controller.queue_redo(current_frame + 3, stick_input)
+    kb_controller.queue_input('stick', {'stick': Button.BUTTON_MAIN, 'x': new_x, 'y': new_y}, current_frame + 1, current_frame + 2)
+    kb_controller.queue_redo(current_frame + 2, stick_input)
     
-    kb_controller.queue_input('button', Button.BUTTON_L, current_frame + 2, current_frame + 3)
-    kb_controller.queue_redo(current_frame + 3, shield_button)
+    kb_controller.queue_input('button', Button.BUTTON_L, current_frame + 1, current_frame + 2)
+    kb_controller.queue_redo(current_frame + 2, shield_button)
 
 def queue_counter(kb_controller, player, framedata):
     current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
@@ -1180,7 +1197,8 @@ def queue_jump(kb_controller, player, direction=0, delay=0, use_current_frame=Fa
     
     if delay != 0:
         current_frame += delay
-    if use_current_frame:
+        
+    if use_current_frame and current_frame != kb_controller.gamestate.frame:
         current_frame -= 1
     
     if direction != 0:
@@ -1224,7 +1242,7 @@ def queue_jcgrab(kb_controller, player, dash=0):
     
     kb_controller.queue_input('button', Button.BUTTON_Z, current_frame + 1 + grab_offset, current_frame + 2 + grab_offset)
 
-def queue_jab(kb_controller, player, jab_count=1, gentleman=False, delay=0):
+def queue_jab(kb_controller, player, jab_count=1, gentleman=False, delay=0, hold_frames=0):
     current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
     if jab_count == 0:
         return
@@ -1250,7 +1268,7 @@ def queue_jab(kb_controller, player, jab_count=1, gentleman=False, delay=0):
             'button',
             Button.BUTTON_A,
             start,
-            end
+            end + hold_frames
         )
 
 def get_slide_pos(player, framedata, time=1):
@@ -1263,10 +1281,10 @@ def get_slide_pos(player, framedata, time=1):
         
     return move_location
 
-def get_fly_pos(player, gamestate, framedata, time=1):
+def get_fly_pos(player, gamestate, framedata, time=1, y_margin=0.0, collide_below_platforms=False):
     # Calculate location during flight
     if framedata.is_hit(player) or not player.on_ground:
-        target_pos_x, target_pos_y, _ = framedata.project_hit_location(gamestate, player, time)
+        target_pos_x, target_pos_y, _ = framedata.project_hit_location(gamestate, player, time, y_margin, collide_below_platforms)
         return [target_pos_x, target_pos_y]
     else:
         return [player.x, player.y]
@@ -1297,17 +1315,14 @@ def handle_techchase(kb_controller, gamestate, player, opponent, framedata):
     
     current_frame = opponent.action_frame
     local_char = player.character
-    first_grab_frame = framedata.first_hitbox_frame(local_char, Action.GRAB) - console.online_delay
-    last_grab_frame = framedata.last_hitbox_frame(local_char, Action.GRAB)
+    first_grab_frame = framedata.first_hitbox_frame(local_char, Action.GRAB) + console.online_delay
+    last_grab_frame = framedata.last_hitbox_frame(local_char, Action.GRAB) + console.online_delay
     time_to_chase = framedata.last_roll_frame(opp_char, chase_scenario) - current_frame
     is_attack = framedata.is_attack(opp_char, chase_scenario)
     if chase_scenario == Action.NEUTRAL_GETUP:
         time_to_chase = 30 - current_frame
     elif is_attack or is_damaged:
         time_to_chase = framedata.last_frame(opp_char, chase_scenario) - current_frame
-    
-    # Account for delay and input frames
-    time_to_chase -= console.online_delay + 6
     
     target_pos_x = framedata.roll_end_position(gamestate, opponent)
     target_pos_y = opponent.y
@@ -1318,8 +1333,9 @@ def handle_techchase(kb_controller, gamestate, player, opponent, framedata):
     elif framedata.is_hit(opponent) or not opponent.on_ground:
         time_to_chase = opponent.hitstun_frames_left
         target_pos_x, target_pos_y, _ = framedata.project_hit_location(gamestate, opponent)
-        # Account only for delay
-        time_to_chase -= console.online_delay
+    
+    # Account for delay
+    time_to_chase -= console.online_delay
     
     move_location = get_slide_pos(player, framedata, console.online_delay)
     pred_dx = abs(move_location[0] - target_pos_x)
@@ -1340,20 +1356,41 @@ def handle_techchase(kb_controller, gamestate, player, opponent, framedata):
         
     shielding = framedata.is_shielding(player)
     
-    if (pred_dx < 15 and
-        abs(player.speed_ground_x_self) > 0.5 and
-        new_pred_facing == new_facing and
-        time_to_chase > first_grab_frame + 15):
-        queue_wavedash(kb_controller, player, 0, 0.5, -0.3)
+    do_wavedash = False
+    target_dx = 15
+    dashgrab_dx = 10
+    if local_char == Character.CPTFALCON:
+        do_wavedash = True
+        target_dx = 15
+        dashgrab_dx = 10
+    elif local_char == Character.MARTH:
+        target_dx = 25
+        dashgrab_dx = 15
+    
+    if do_wavedash:
+        if (pred_dx < target_dx and
+            abs(player.speed_ground_x_self) > 0.5 and
+            new_pred_facing == new_facing and
+            time_to_chase > first_grab_frame + 15):
+            queue_wavedash(kb_controller, player, 0, 0.5, -0.3)
     
     player_size = float(framedata.characterdata[local_char]["size"])
     in_range = (new_facing == current_facing and
-                pred_dx < 15 and
+                pred_dx < target_dx and
                 dy < player_size)
     
+    can_turn = (new_facing != current_facing and
+                time_to_chase > last_grab_frame and
+                not is_mistech)
+    
+    if (can_turn and
+        pred_dx < target_dx and
+        dy < player_size):
+        queue_turn(kb_controller, new_facing)
+    
     can_grab = (in_range and
-                time_to_chase < last_grab_frame and
-                time_to_chase > first_grab_frame)
+                time_to_chase <= last_grab_frame and
+                time_to_chase >= first_grab_frame)
     
     if is_damaged and chase_scenario == Action.GRAB_PUMMELED:
         can_grab = False
@@ -1368,13 +1405,14 @@ def handle_techchase(kb_controller, gamestate, player, opponent, framedata):
                 player.action == Action.TURNING or
                 player.action == Action.WALK_FAST or
                 player.action == Action.WALK_MIDDLE or
-                player.action == Action.WALK_SLOW))
+                player.action == Action.WALK_SLOW) and
+               (player.character != Character.GANONDORF))
     if can_jab:
-        queue_jab(kb_controller, player)
+        queue_jab(kb_controller, player, hold_frames=time_to_chase)
         return
     
     dash_grab = 0
-    if pred_dx < 10:
+    if pred_dx > dashgrab_dx:
         dash_grab = 1 if new_facing else -1
     
     if can_grab and not is_attack and not is_mistech:
@@ -1385,18 +1423,30 @@ def handle_techchase(kb_controller, gamestate, player, opponent, framedata):
         elif new_facing == current_facing and shielding:
             queue_jcgrab(kb_controller, player)
 
-def queue_crouch(kb_controller, frames=1, delay=0):
+def queue_crouch(kb_controller, frames=1, delay=0, use_current_frame=False):
     current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
+    
+    if use_current_frame and current_frame != kb_controller.gamestate.frame:
+        current_frame -= 1
     
     current_frame += delay
     
     stick_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.DOWN)
-    new_x, new_y = kb_controller.get_tilt(stick_input, False, True)
-    kb_controller.queue_input('stick', {'stick': Button.BUTTON_MAIN, 'x': new_x, 'y': new_y}, current_frame + 1, current_frame + 1 + frames)
+    left_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.LEFT)
+    rigth_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.RIGHT)
+    if kb_controller.hotkeys_state[left_input] or kb_controller.hotkeys_state[rigth_input]:
+        kb_controller.queue_input('stick', {'stick': Button.BUTTON_MAIN, 'x': 0.5, 'y': 0.5}, current_frame + 1, current_frame + 1)
+        current_frame += 1
+    
+    _, new_y = kb_controller.get_tilt(stick_input, False, True)
+    kb_controller.queue_input('stick', {'stick': Button.BUTTON_MAIN, 'x': 0.5, 'y': new_y}, current_frame + 1, current_frame + 1 + frames)
     kb_controller.queue_redo(current_frame + 1 + frames, stick_input)
 
-def queue_cstick(kb_controller, analog_direction):
+def queue_cstick(kb_controller, analog_direction, use_current_frame=False):
     current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
+    
+    if use_current_frame and current_frame != kb_controller.gamestate.frame:
+        current_frame -= 1
     
     if analog_direction == Analog.NEUTRAL:
         stick_input = kb_controller.get_analog_hotkey(Button.BUTTON_C, Analog.RIGHT)
@@ -1442,8 +1492,9 @@ def queue_ledgedash(kb_controller, player, jump_direction=0, hold_in_frames=0, w
     queue_crouch(kb_controller)
     queue_shorthop(kb_controller, jump_direction, max_x, True)
     if hold_in_frames != 0:
-        queue_turn(kb_controller, player.facing, hold_in_frames, max_x, use_current_frame=True)
-    queue_wavedash(kb_controller, player, wavedash_direction, set_x=wavedash_x, set_y=wavedash_y, delay=wd_delay)
+        queue_turn(kb_controller, player.facing, hold_in_frames, max_x)
+    if wavedash_y != 0:
+        queue_wavedash(kb_controller, player, wavedash_direction, set_x=wavedash_x, set_y=wavedash_y, delay=wd_delay)
 
 def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=False, no_impact_land=False, ecb_shift=False):
     ledgedash_key = kb_controller.hotkeys_state[29]
@@ -1451,21 +1502,70 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
         (player.action != Action.EDGE_HANGING and player.action != Action.EDGE_CATCHING)):
         if player.character == Character.CPTFALCON:
             if (player.action == Action.FALLING and
-                (player.action_frame == 1 or player.action_frame >= 5 and player.action_frame <= 8)):
+                (player.action_frame >= 1 and player.action_frame <= 8)):
                 ecb_shift = True
-            else:
-                ecb_shift = False
-            if (player.action == Action.SWORD_DANCE_3_LOW and
+            elif (player.action == Action.SWORD_DANCE_3_LOW and
                 (player.action_frame >= 44 and player.action_frame <= 50) or
                 (player.action_frame >= 55 and player.action_frame <= 58)):
                 no_impact_land = True
             else:
                 no_impact_land = False
+        elif player.character == Character.FALCO:
+            if (player.action == Action.FALLING and
+                (player.action_frame == 1 or
+                (player.action_frame >= 4 and player.action_frame <= 8))):
+                ecb_shift = True
+            elif player.action == Action.SWORD_DANCE_1_AIR:
+                ecb_shift = True
+            elif (player.action == Action.SWORD_DANCE_4_MID and
+                (player.action_frame == 22)):
+                ecb_shift = True
+            elif (player.action == Action.DEAD_FALL and
+                  (player.action_frame == 7)):
+                ecb_shift = True
+            else:
+                ecb_shift = False
+        elif player.character == Character.GANONDORF:
+            if (player.action == Action.SWORD_DANCE_3_LOW and
+                (player.action_frame == 51 or player.action_frame == 54)):
+                ecb_shift = True
+            elif (player.action == Action.JUMPING_ARIAL_FORWARD and
+                  player.action_frame == 14 or
+                  (player.action_frame >= 28 and player.action_frame <= 33)):
+                ecb_shift = True
+            else:
+                ecb_shift = False
+        elif player.character == Character.LUIGI:
+            if (player.action == Action.FALLING and
+                (player.action_frame >= 6 and player.action_frame <= 9)):
+                ecb_shift = True
+            elif (player.action == Action.SWORD_DANCE_4_MID and
+                  (player.action_frame == 26)):
+                ecb_shift = True
+            else:
+                ecb_shift = False
+        elif player.character == Character.SHEIK:
+            if (player.action == Action.FALLING and
+                (player.action_frame == 1 or player.action_frame == 3 or player.action_frame >= 5)):
+                ecb_shift = True
+            elif (player.action == Action.DEAD_FALL):
+                ecb_shift = True
+            elif (player.action == Action.DOWN_B_GROUND_START and
+                  (player.action_frame >= 23 and player.action_frame <= 28) or
+                  player.action_frame == 39):
+                ecb_shift = True
+            else:
+                ecb_shift = False
         return interruptable, no_impact_land, ecb_shift
     
     finish_wavedash = kb_controller.hotkeys_state[25]
     finish_interrupt = kb_controller.hotkeys_state[24]
     force_normal_stall = kb_controller.hotkeys_state[23]
+    left_hotkey = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.LEFT)
+    pressing_left = kb_controller.hotkeys_state[left_hotkey]
+    right_hotkey = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.RIGHT)
+    pressing_right = kb_controller.hotkeys_state[right_hotkey]
+    current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
     
     max_x = 1.3 if player.facing else -0.3
     jump_direction = 1 if player.facing else -1
@@ -1488,16 +1588,16 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
     normal_stall = True
     wd_delay = 0
     nil_delay = 0
-    if finish_wavedash:
+    if finish_wavedash or finish_interrupt:
         wavedash_x = 1.3 if player.facing else -0.3
         wavedash_y += 0.37
     if local_char == Character.CPTFALCON:
-        jump_in_frames = 8
+        jump_in_frames = 9
         hold_in_frames = 6
         if gamestate.stage == melee.Stage.YOSHIS_STORY:
             hold_in_frames = 7
-        if ecb_shift:
-            hold_in_frames = 7
+        if finish_wavedash:
+            hold_in_frames = 8
         if interruptable and finish_interrupt:
             hold_in_frames = 4
         fall_frames = 5
@@ -1512,17 +1612,31 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
         aerial_interrupt = None
         normal_stall = False
         jump_in_frames = 0
-        hold_in_frames = 2
-        if interruptable:
-            hold_in_frames = 1
-        fall_frames = 9
+        hold_in_frames = 1 if pressing_right or pressing_left else 2
+        if ecb_shift:
+            hold_in_frames = 2
+        # elif finish_wavedash and (pressing_left or pressing_right):
+        #     wavedash_y = -0.3 + 0.21 # Using a steep wavedash to hit the ground earlier
+        fall_frames = 10
     elif local_char == Character.GANONDORF:
         wavedash_x += 0.55 if player.facing else -0.55
-        jump_in_frames = 11
+        jump_in_frames = 13
         hold_in_frames = 1
-        fall_frames = 4
         if finish_wavedash:
-            hold_in_frames = 9
+            hold_in_frames = 11
+            if ecb_shift:
+                hold_in_frames = 12
+            if gamestate.stage == melee.Stage.YOSHIS_STORY:
+                if not pressing_left and not pressing_right:
+                    hold_in_frames = 13
+            elif gamestate.stage == melee.Stage.POKEMON_STADIUM:
+                if not pressing_left and not pressing_right:
+                    hold_in_frames = 13
+        aerial_interrupt = None
+        if finish_interrupt:
+            wavedash_y = 0
+            hold_in_frames = 16
+        fall_frames = 5
     elif local_char == Character.JIGGLYPUFF:
         aerial_interrupt = None
         normal_stall = False
@@ -1531,11 +1645,13 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
         fall_frames = 11
     elif local_char == Character.LINK:
         wavedash_x += 0.55 if player.facing else -0.55
-        jump_in_frames = 6
+        jump_in_frames = 7
         hold_in_frames = 0
         fast_fall_stall_wait = 9
+        if gamestate.stage == melee.Stage.YOSHIS_STORY:
+            hold_in_frames = 1
         if finish_wavedash:
-            hold_in_frames = 4
+            hold_in_frames = 5
         # Select a random aerial interrupt
         rand_int = random.randint(0, 4)
         if rand_int == 0:
@@ -1552,20 +1668,33 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
     elif local_char == Character.LUIGI:
         wavedash_x += 0.55 if player.facing else -0.55
         jump_in_frames = 5
-        hold_in_frames = 0
-        fast_fall_stall_wait = 5
+        if ecb_shift:
+            jump_in_frames = 7
+            if gamestate.stage == melee.Stage.BATTLEFIELD:
+                jump_in_frames = 9
+        hold_in_frames = 5
+        # fast_fall_stall_wait = 4
         fall_frames = 20
         if finish_wavedash or finish_interrupt:
-            hold_in_frames = 1
+            hold_in_frames = 3
             # After stalling, Luigi's ECB is shifted, so we have to modify the wavedash
-            # if no_impact_land:
-            #     hold_in_frames = 2
-            #     wavedash_direction = 0
+            if ecb_shift:
+                hold_in_frames = 4
+                wavedash_direction = 0
         fast_fall_interrupt = True
         fast_fall_stall_start = True
         aerial_interrupt = None
         always_interruptable = True
         jump_regrab = False
+    elif local_char == Character.MARTH:
+        jump_in_frames = 11
+        hold_in_frames = 5
+        fall_frames = 7
+        if finish_wavedash or finish_interrupt:
+            hold_in_frames = 11
+        else:
+            wavedash_x += 0.55 if player.facing else -0.55
+        aerial_interrupt = None
     elif local_char == Character.MEWTWO:
         normal_stall = False
         jump_regrab = False
@@ -1588,49 +1717,63 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
         if finish_wavedash:
             hold_in_frames = 0
     elif local_char == Character.ROY:
-        jump_in_frames = 8
-        if gamestate.stage == melee.Stage.YOSHIS_STORY:
-            jump_in_frames = 9
+        jump_in_frames = 11
         fast_fall_stall_wait = 2
         if finish_wavedash:
-            hold_in_frames = 8
-            if gamestate.stage == melee.Stage.YOSHIS_STORY:
-                hold_in_frames = 9
+            hold_in_frames = 10
         elif finish_interrupt:
             fall_frames = 2
             if gamestate.stage == melee.Stage.YOSHIS_STORY:
-                hold_in_frames = 8
+                hold_in_frames = 9
             else:
-                hold_in_frames = 12
+                hold_in_frames = 15
         fast_fall_interrupt = True
         aerial_interrupt = Analog.NEUTRAL
         always_interruptable = True
     elif local_char == Character.SAMUS:
         aerial_interrupt = Analog.UP
         always_interruptable = True
-        jump_in_frames = 10
+        jump_in_frames = 11
+        hold_in_frames = 4
         fall_frames = 5
         if gamestate.stage == melee.Stage.YOSHIS_STORY:
             fast_fall_stall_end = False
         if gamestate.stage == melee.Stage.BATTLEFIELD:
             jump_in_x = 0.9 if player.facing else 0.1
         if finish_wavedash:
-            hold_in_frames = 9
+            hold_in_frames = 11
             if gamestate.stage == melee.Stage.BATTLEFIELD:
                 jump_direction = 0
-                hold_in_frames = 10
+                hold_in_frames = 11
         if finish_interrupt:
             fall_frames = 1
-            hold_in_frames = 6
+            hold_in_frames = 7
     elif local_char == Character.SHEIK:
         wavedash_x += 0.55 if player.facing else -0.55
         jump_in_frames = 8
-        hold_in_frames = 3
-        fall_frames = 5
+        hold_in_frames = 5
+        if ecb_shift:
+            hold_in_frames = 6
+        if gamestate.stage == melee.Stage.BATTLEFIELD:
+            jump_in_frames = 9
+            if ecb_shift:
+                jump_in_frames = 10
+        fall_frames = 6
         if finish_wavedash:
-            hold_in_frames = 2
+            hold_in_frames = 4
+            if ecb_shift:
+                hold_in_frames = 5
         fast_fall_stall_start = True
         jump_regrab = False
+    
+    # Only wavedash in the direction the player is moving
+    if ((finish_wavedash or
+         (finish_interrupt and not aerial_interrupt)) and
+        ((not pressing_left and not pressing_right) or
+        (pressing_left and player.facing) or
+        (pressing_right and not player.facing))):
+        wavedash_direction = 0
+        wavedash_x = 0.5
     
     # No impact lands are high priority, so we skip stalls
     if no_impact_land and (finish_wavedash or finish_interrupt):
@@ -1646,11 +1789,11 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
         # Drop from ledge, jump inwards, do aerial interrupt input
         queue_crouch(kb_controller, fall_frames if fast_fall_interrupt else 1)
         queue_shorthop(kb_controller, jump_direction, jump_in_x, True)
-        queue_turn(kb_controller, player.facing, hold_in_frames, max_x, use_current_frame=True)
+        queue_turn(kb_controller, player.facing, hold_in_frames, max_x)
         queue_cstick(kb_controller, aerial_interrupt)
         return False, False, False
     elif finish_interrupt and not aerial_interrupt:
-        queue_ledgedash(kb_controller, player, jump_direction, hold_in_frames, wavedash_direction, max_x)
+        queue_ledgedash(kb_controller, player, jump_direction, hold_in_frames, wavedash_direction, max_x, wd_delay, wavedash_x, wavedash_y)
         return False, False, False
     
     dx = abs(player.x - opponent.x)
@@ -1669,7 +1812,7 @@ def handle_ledgedash(kb_controller, gamestate, player, opponent, interruptable=F
         if fast_fall_stall_end:
             queue_crouch(kb_controller, delay=fast_fall_stall_wait)
         return False, True, False
-    elif wait_type == 1 and jump_regrab:
+    elif (wait_type == 1 and jump_regrab) or (wait_type == 0 and jump_regrab and (dx <= 15 or finish_interrupt)):
         # Drop from ledge with fast fall and jump
         queue_crouch(kb_controller, fall_frames)
         queue_shorthop(kb_controller)
@@ -1739,17 +1882,27 @@ def handle_gentleman(kb_controller, gamestate, player, opponent, framedata):
     
     queue_jab(kb_controller, player, 3, gentleman)
 
-def queue_zdrop(kb_controller, player, framedata, with_facing=0):
+def queue_zdrop(kb_controller, player, framedata, with_facing=0, use_current_frame=False):
     if player.on_ground:
         queue_shorthop(kb_controller, with_facing, use_current_frame=True)
     
     current_frame = kb_controller.gamestate.frame if kb_controller.inputs_reserved == 0 else kb_controller.inputs_reserved
+    
+    if use_current_frame and current_frame != kb_controller.gamestate.frame:
+        current_frame -= 1
+    
+    # Ensure stick is neutral
+    stick_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.RIGHT)
+    kb_controller.queue_input('stick', {'stick': Button.BUTTON_MAIN, 'x': 0.5, 'y': 0.5}, current_frame + 1, current_frame + 2)
+    kb_controller.queue_redo(current_frame + 2, stick_input)
+    
     jumpsquat_frames = framedata.last_frame(player.character, Action.KNEE_BEND)
     if jumpsquat_frames != -1:
         current_frame += jumpsquat_frames
     else:
         # Default jumpsquat placeholder
         current_frame += 4
+    
     kb_controller.queue_input(
         'button',
         Button.BUTTON_Z,
@@ -1765,7 +1918,7 @@ def calculate_wavedash_x(start_x, target_x, facing, optimal_distance=10):
     wavedash_x += (offset_x * (1 - percentage_wavedash))
     return wavedash_x
 
-def handle_aciddrop(kb_controller, gamestate, player, opponent, framedata, has_dropped=False):
+def handle_aciddrop(kb_controller, gamestate, player, opponent, framedata, has_dropped=False, holding_bomb=False, threw_bomb=False):
     active_key = kb_controller.hotkeys_state[30]
     if (kb_controller.inputs_reserved >= gamestate.frame or not active_key or
         framedata.is_attacking(player)):
@@ -1776,6 +1929,29 @@ def handle_aciddrop(kb_controller, gamestate, player, opponent, framedata, has_d
         not player.action == Action.AIRDODGE and
         player.y > 4):
         return has_dropped
+    
+    # On ledge, pull a bomb
+    if player.action == Action.EDGE_HANGING or player.action == Action.EDGE_CATCHING:
+        if not holding_bomb:
+            queue_crouch(kb_controller)
+            queue_shorthop(kb_controller, use_current_frame=True)
+            queue_special(kb_controller, Analog.DOWN, use_current_frame=True)
+            holding_bomb = True
+        else:
+            return False
+    
+    # When offstage, drop the bomb and hit it for a recovery
+    if player.off_stage:
+        if holding_bomb:
+            if player.jumps_left != 0 or player.action == Action.JUMPING_ARIAL_FORWARD:
+                queue_jump(kb_controller, player)
+                queue_zdrop(kb_controller, player, framedata, use_current_frame=True)
+                queue_cstick(kb_controller, Analog.NEUTRAL, True)
+            else:
+                queue_cstick(kb_controller, Analog.UP)
+                return True
+        elif threw_bomb:
+            queue_special(kb_controller, Analog.UP)
     
     # Check if landing
     is_landing = (
@@ -1791,7 +1967,12 @@ def handle_aciddrop(kb_controller, gamestate, player, opponent, framedata, has_d
         return False
     
     if has_dropped:
+        # Pick the bomb back up
         queue_jab(kb_controller, player)
+        return False
+    
+    # No bomb to drop
+    if not holding_bomb:
         return False
     
     move_location = get_slide_pos(player, framedata, 3)
@@ -1805,6 +1986,7 @@ def handle_aciddrop(kb_controller, gamestate, player, opponent, framedata, has_d
     if true_dx > 10 or pred_dy > 10:
         return False
     
+    # Turn to face the opponent
     if new_pred_facing != player.facing:
         queue_turn(kb_controller, new_pred_facing, 1)
     
@@ -1813,7 +1995,9 @@ def handle_aciddrop(kb_controller, gamestate, player, opponent, framedata, has_d
     # Calculate wavedash x based on distance to bomb drop position
     wavedash_x = calculate_wavedash_x(bomb_drop_x, target_pos[0], new_pred_facing)
     
+    # Drop the bomb
     queue_zdrop(kb_controller, player, framedata)
+    # Wavedash towards the bomb's predicted position
     queue_wavedash(kb_controller, player, new_pred_facing if pred_dx > 10 else 0, wavedash_x, -0.3, False, True)
     return True
 
@@ -1926,16 +2110,20 @@ def is_shielding(player, kb_controller, framedata):
     
     return button_shield or framedata.is_shielding(player)
 
-def handle_shieldoption(kb_controller, gamestate, player, framedata, opponent):
+def handle_shieldoption(kb_controller, gamestate, player, framedata, opponent, stage_bounds):
     if (not player.on_ground or kb_controller.inputs_reserved >= gamestate.frame or
         player.hitstun_frames_left < 0 or not is_shielding(player, kb_controller, framedata)):
         kb_controller.force_tilt = False
+        kb_controller.force_tilt_platform = False
         return
     
     # Ensure we do not roll while shielding by forcing tilt values instead of full stick values
     kb_controller.force_tilt = True
+    if player.y > 1:
+        kb_controller.force_tilt_platform = True
     if kb_controller.hotkeys_state[24] or kb_controller.hotkeys_state[25]:
         kb_controller.force_tilt = False
+        kb_controller.force_tilt_platform = False
     
     target_pos = get_fly_pos(opponent, gamestate, framedata, 3)
     if opponent.on_ground and framedata.is_actionable(opponent):
@@ -1969,6 +2157,24 @@ def handle_shieldoption(kb_controller, gamestate, player, framedata, opponent):
     right_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.RIGHT)
     left_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.LEFT)
     direction = 1 if kb_controller.hotkeys_state[right_input] else -1 if kb_controller.hotkeys_state[left_input] else 0
+    
+    if stage_bounds != None:
+        stage_left_dx = abs(player.x - stage_bounds[0][0])
+        stage_right_dx = abs(stage_bounds[1][0] - player.x)
+        if (stage_left_dx < 5 or stage_right_dx < 5):
+            if direction == -1:
+                direction = 1
+            elif direction == 1:
+                direction = -1
+            
+    closest_platform = framedata.get_closest_platform(gamestate, [player.x, player.y])
+    if not closest_platform is None:
+        platform_x, platform_y, platform_width = closest_platform
+        half_width = platform_width/2
+        # Check if we're close enough to the platform to wave dash
+        if abs(player.x - platform_x) > half_width or player.off_stage:
+            return
+    
     queue_wavedash(kb_controller, player, direction, delay=time_left)
 
 def handle_walltech(kb_controller, gamestate, player, stage_bounds_ground, framedata, has_teched=False, sdi_frames=0):
@@ -2123,9 +2329,37 @@ def handle_walltech(kb_controller, gamestate, player, stage_bounds_ground, frame
 
     return teched, sdi_frames
 
-def handle_superwavedash(kb_controller, gamestate, player, framedata):
+def handle_samusattack(kb_controller, gamestate, player, framedata):
     active_key = kb_controller.hotkeys_state[30]
+    do_missiles = kb_controller.hotkeys_state[25]
     if (kb_controller.inputs_reserved >= gamestate.frame or not active_key):
+        return
+    
+    last_frame = framedata.last_frame(player.character, player.action)
+    attacking = framedata.is_attacking(player) and player.action_frame < last_frame - console.online_delay
+    if (do_missiles and framedata.is_actionable(player) and
+        not attacking):
+        direction = Analog.RIGHT if player.facing else Analog.LEFT
+        if player.on_ground:
+            missile_end = ((player.action == Action.SWORD_DANCE_2_HIGH and player.action_frame == 47) or
+                           (player.action == Action.SWORD_DANCE_1 and player.action_frame == 57))
+            # Shield drop
+            if (missile_end or not attacking) and player.y > 1:
+                queue_shield(kb_controller)
+                queue_turn(kb_controller, player.facing, set_x = 0.5, set_y = 0.1625)
+            elif missile_end:
+                queue_shorthop(kb_controller, use_current_frame=True)
+            elif player.y < 1 and not gamestate.stage in [melee.Stage.POKEMON_STADIUM, melee.Stage.YOSHIS_STORY]:
+                queue_special(kb_controller, direction)
+            elif player.action == Action.LANDING and player.action_frame == 1:
+                queue_shorthop(kb_controller, use_current_frame=True)
+        elif player.speed_y_self <= 0:
+            # Fastfall missile
+            queue_crouch(kb_controller)
+            queue_special(kb_controller, direction, use_current_frame=True)
+        else:
+            # Normal missile
+            queue_special(kb_controller, direction)
         return
     
     in_morphball = (player.action == Action.SWORD_DANCE_4_HIGH or
@@ -2143,8 +2377,8 @@ def handle_superwavedash(kb_controller, gamestate, player, framedata):
         queue_special(kb_controller, Analog.DOWN)
     elif action_frame == 36:
         queue_turn(kb_controller, direction, 1, set_x=0.5, set_y=0.5)
-        queue_turn(kb_controller, not direction, 1, use_current_frame=True)
-        queue_turn(kb_controller, direction, 1, use_current_frame=True)
+        queue_turn(kb_controller, not direction, 1)
+        queue_turn(kb_controller, direction, 1)
         queue_crouch(kb_controller, frames=1)
 
 def handle_shine(kb_controller, gamestate, player, opponent_player, framedata, shine_on_shield=False):
@@ -2166,6 +2400,8 @@ def handle_shine(kb_controller, gamestate, player, opponent_player, framedata, s
         direction = 1
     elif kb_controller.hotkeys_state[left_input]:
         direction = -1
+        
+    opponent_size = float(framedata.characterdata[opponent_player.character]["size"])
     
     if not in_shine and player.action != Action.KNEE_BEND:
         shine_delay = 0
@@ -2177,83 +2413,35 @@ def handle_shine(kb_controller, gamestate, player, opponent_player, framedata, s
         if not opponent_player.on_ground:
             move_location = get_fly_pos(opponent_player, gamestate, framedata, 3)
         dist = abs(player.x - move_location[0])
-        return True if dist < 11.8 else False
+        disty = abs(player.y - move_location[1])
+        return True if dist < 11.8 and disty < opponent_size else False
     elif player.hitlag_left > 0:
         time_left = player.hitlag_left - console.online_delay
         if framedata.is_shielding(opponent_player):
-            queue_jump(kb_controller, player, delay=time_left)
+            queue_jump(kb_controller, player, delay=time_left, use_current_frame=True)
             return True
         else:
-            queue_wavedash(kb_controller, player, direction, delay=time_left)
+            queue_wavedash(kb_controller, player, direction, use_current_frame=True, delay=time_left)
     elif not shine_on_shield:
         if direction != 0:
-            queue_wavedash(kb_controller, player, direction)
+            queue_wavedash(kb_controller, player, direction, use_current_frame=True)
         else:
             queue_jump(kb_controller, player)
             queue_special(kb_controller, Analog.DOWN, delay=3)
     elif shine_on_shield and player.hitlag_left <= 0:
+        queue_shorthop(kb_controller, direction, use_current_frame=True)
+        queue_cstick(kb_controller, Analog.NEUTRAL)
         return False
     
     return shine_on_shield
 
-def get_closest_edge(position, stage_bounds, check_below=True):
-    nearest_dist = 1000
-    nearest_edge = (None, 0)
-    below_edge = (None, 0)
-    below_dist = 1000
-    for bound in stage_bounds:
-        for i in range(len(bound)):
-            edge_type = -1 if i == 0 else 1
-            edge = bound[i]
-            
-            if edge[0] is None:
-                continue
-            
-            xdist = position[0] - edge[0]
-            ydist = position[1] - edge[1]
-            dist = math.sqrt((xdist**2) + (ydist**2))
-            if dist < nearest_dist:
-                nearest_dist = dist
-                nearest_edge = (edge, edge_type)
-            if edge[1] <= position[1] and dist < below_dist:
-                below_dist = dist
-                below_edge = (edge, edge_type)
-                    
-    if check_below:
-        return below_edge
-        
-    return nearest_edge
-
-# How long it will take the player to get to an edge
-def time_to_edge(player, edge, framedata):
-    # Distance to the edge point
-    edge_x = edge[0]
-    edge_y = edge[1]
-    edgedistance = abs(player.x) - (edge_x + 15)
-    # Assume player can move at their "max" speed
-    airhorizspeed = framedata.characterdata[player.character]["AirSpeed"]
-    edgecancelframes_x = edgedistance // airhorizspeed
-    fastfallspeed = framedata.characterdata[player.character]["FastFallSpeed"]
-
-    # Can player get to the vertical position in time?
-    # This is the shortest possible time the player could get into position
-    edgecancelframes_y = 1000
-    # Are we already in place?
-    if edge_y > player.y > edge_y - 5:
-        edgecancelframes_y = 0
-    # Are we above?
-    elif player.y > edge_y:
-        edgecancelframes_y = (player.y + 5) // fastfallspeed
-
-    return max(edgecancelframes_x, edgecancelframes_y)
-
-def handle_edgecancel(kb_controller, gamestate, player, framedata, stage_bounds):
+def handle_edgecancel(kb_controller, gamestate, player, framedata):
     if (kb_controller.inputs_reserved >= gamestate.frame or
         player.on_ground or not framedata.is_attacking(player) or not kb_controller.edge_cancels):
         return
     
-    move_position = get_fly_pos(player, gamestate, framedata, 2)
-    closest_edge, edge_type = get_closest_edge(move_position, stage_bounds)
+    move_position = get_fly_pos(player, gamestate, framedata, 2, 5)
+    closest_edge, edge_type = framedata.get_closest_edge(gamestate, move_position)
     if closest_edge is None:
         return
 
@@ -2396,100 +2584,213 @@ def handle_edgecancel(kb_controller, gamestate, player, framedata, stage_bounds)
         stick_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.RIGHT)
         kb_controller.queue_redo(current_frame + fastfall_frame + 1, stick_input)
 
-def get_closest_platform(position, stage_bounds, check_below=True):
-    nearest_dist = 1000
-    nearest_platform = (0, 0, 0)
-    below_dist = 1000
-    below_platform = (0, 0, 0)
-    for bound in stage_bounds:
-        left_edge = bound[0]
-        right_edge = bound[1]
-        
-        if left_edge[0] is None:
-            continue
-        
-        xdist = position[0] - left_edge[0]
-        ydist = position[1] - left_edge[1]
-        dist = math.sqrt((xdist**2) + (ydist**2))
-        if dist < nearest_dist:
-            nearest_dist = dist
-            width = right_edge[0] - left_edge[0]
-            nearest_platform = (left_edge[0] + width/2, left_edge[1], width)
-        if left_edge[1] <= position[1] and dist < below_dist:
-            below_dist = dist
-            below_platform = (left_edge[0] + width/2, left_edge[1], width)
-                    
-    if check_below:
-        return below_platform
-        
-    return nearest_platform
-
 def can_waveland(player, framedata):
     return (
         not framedata.is_attacking(player) and
-        (framedata.is_falling(player) or framedata.is_jumping(player))
+        (framedata.is_falling(player) or framedata.is_jumping(player)) and
+        player.y > -2.5
     )
 
-def handle_waveland(kb_controller, gamestate, player, framedata, stage_bounds):
+def handle_waveland(kb_controller, gamestate, player, framedata):
     active_key = kb_controller.hotkeys_state[24]
-    if (player.on_ground or kb_controller.inputs_reserved >= gamestate.frame or
-        not active_key or not can_waveland(player, framedata)):
+    ledgedash_key = kb_controller.hotkeys_state[29]
+    if (player.on_ground or kb_controller.inputs_reserved >= gamestate.frame + 2 or
+        not active_key or ledgedash_key or not can_waveland(player, framedata) or
+        player.action == Action.PLATFORM_DROP):
         return
     
     pos_x = player.x
     pos_y = player.y
-    move_location = get_fly_pos(player, gamestate, framedata, 2)
-    speed_x = player.speed_air_x_self + player.speed_x_attack
-    speed_y = player.speed_y_self + player.speed_y_attack
+    y_margin_above = 0
+    y_margin_below = 0
+    fly_margin = 0
+    predict_frames = 2
+    waveland_x = 0
+    waveland_y = 0
+    waveland_delay = 0
+    fastfall_frames = [0]
+    fastfallspeed = framedata.characterdata[player.character]["FastFallSpeed"]
     size = float(framedata.characterdata[player.character]["size"])
     
-    closest_platform = get_closest_platform(move_location, stage_bounds)
+    if player.character == Character.CPTFALCON:
+        y_margin_above = 5
+        y_margin_below = 4
+        fly_margin = 8
+        if (player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]):
+            y_margin_above = 0
+            fly_margin = 5
+        if player.action == Action.FALLING:
+            y_margin_below = 3
+        if player.speed_y_self <= 0:
+            predict_frames = 3
+            if player.action == Action.JUMPING_FORWARD:
+                y_margin_below = 5.65
+    elif player.character == Character.FALCO:
+        if player.action == Action.JUMPING_BACKWARD:
+            y_margin_below = 2
+            waveland_y = 0.09
+            fastfall_frames = [11, 25]
+        elif player.action == Action.JUMPING_FORWARD:
+            y_margin_below = 2
+            waveland_y = 0.09
+            fastfall_frames = [11, 25]
+        elif player.action == Action.FALLING:
+            y_margin_below = 2
+            waveland_y = 0.09
+        if player.speed_y_self > 0:
+            fly_margin = 5
+            waveland_y = 0.3225
+            if player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]:
+                y_margin_above = 1
+                waveland_y = 0.09
+    if player.character == Character.GANONDORF:
+        y_margin_below = 11
+        y_margin_above = 5
+        fly_margin = 5
+        if player.action == Action.JUMPING_ARIAL_BACKWARD:
+            y_margin_below = 4
+            fastfall_frames = [17, 18]
+            if player.speed_y_self > 0:
+                y_margin_above = 0
+                fly_margin = 1
+                waveland_y = 0.09
+        if player.action in [Action.JUMPING_FORWARD, Action.JUMPING_BACKWARD]:
+            fastfall_frames = [15, 19]
+            y_margin_below = 4
+        # if (player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]):
+        #     y_margin_above = 0
+        #     fly_margin = 4
+        #     if player.action == Action.JUMPING_ARIAL_BACKWARD:
+        #         y_margin_below = 5
+        #     elif player.action == Action.JUMPING_ARIAL_FORWARD and player.speed_y_self <= 0:
+        #         waveland_y = 0.5
+        # if player.action == Action.FALLING:
+        #     y_margin_below = 8
+        # if player.speed_y_self <= 0:
+        #     predict_frames = 3
+        #     if player.action == Action.JUMPING_FORWARD:
+        #         y_margin_below = 5.65
+        #     if player.action == Action.JUMPING_BACKWARD:
+        #         y_margin_below = 5
+    elif player.character == Character.LINK:
+        fly_margin = 5
+        if player.action == Action.JUMPING_ARIAL_BACKWARD:
+            y_margin_below = 5
+    elif player.character == Character.LUIGI:
+        fly_margin = 5
+        if player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]:
+            fly_margin = 4
+    elif player.character == Character.MARTH:
+        y_margin_below = 1
+        if player.action in [Action.JUMPING_FORWARD, Action.JUMPING_BACKWARD]:
+            fly_margin = 6
+            waveland_y = 0.09
+            fastfall_frames = [22, 31]
+        if (player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]):
+            fly_margin = 5
+            fastfall_frames = [26]
+    elif player.character == Character.ROY:
+        y_margin_below = 1
+        if player.action in [Action.JUMPING_FORWARD, Action.JUMPING_BACKWARD]:
+            fly_margin = 5
+            y_margin_below = 3
+            waveland_y = 0.19
+            fastfall_frames = [13, 22]
+        if (player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]):
+            fly_margin = 4
+            y_margin_below = 1
+            fastfall_frames = [21]
+            if player.speed_y_self > 0:
+                waveland_y = 0.09
+    elif player.character == Character.SAMUS:
+        y_margin_below = 6
+        fly_margin = 8
+        if player.action in [Action.JUMPING_BACKWARD, Action.FALLING]:
+            y_margin_below = 8
+        if player.speed_y_self > 0:
+            fly_margin = 2
+    elif player.character == Character.SHEIK:
+        fly_margin = 7
+        y_margin_below = 1
+        if player.action in [Action.JUMPING_FORWARD, Action.JUMPING_BACKWARD]:
+            y_margin_above = 8
+        if player.action in [Action.JUMPING_ARIAL_FORWARD, Action.JUMPING_ARIAL_BACKWARD]:
+            fly_margin = 5
+            y_margin_below = 5
+            if player.speed_y_self <= 0:
+                waveland_y = 0.09
+        if player.action == Action.FALLING:
+            y_margin_below = 4
+            waveland_y = 0.09
+            
+    can_fastfall = player.speed_y_self <= 0 and player.speed_y_self > -fastfallspeed and fastfall_frames[0] == 0
+    if player.action_frame in fastfall_frames:
+        can_fastfall = True
+    do_fastfall = False
+    if (can_fastfall):
+        do_fastfall = True
+        player.speed_y_self = -fastfallspeed
+        
+    move_location = get_fly_pos(player, gamestate, framedata, predict_frames, fly_margin, True)
+    speed_x = player.speed_air_x_self + player.speed_x_attack
+    speed_y = player.speed_y_self + player.speed_y_attack
+    
+    closest_platform = framedata.get_closest_platform(gamestate, move_location)
     if closest_platform is None:
         return
 
     platform_x, platform_y, platform_width = closest_platform
-    platform_left = platform_x - platform_width/2
-    platform_right = platform_x + platform_width/2
+    half_width = platform_width/2
+    platform_left = platform_x - half_width
+    platform_right = platform_x + half_width
 
     # Check if we're moving towards the platform
     moving_towards_platform = (platform_left < move_location[0] < platform_right)
     if not moving_towards_platform:
         # If not, check if we're close enough to the platform to wave land
-        if abs(move_location[0] - platform_x) > platform_width/2:
-            return
+        if abs(move_location[0] - platform_x) > half_width:
+            if player.off_stage:
+                return
+            
+            # Revert to base platform
+            base_platform = framedata.get_platforms(gamestate, [pos_x, pos_y])[0]
+            platform_y = base_platform[0]
+            platform_left = base_platform[1]
+            platform_right = base_platform[2]
 
-    y_margin = 5
-    if player.action == Action.FALLING:
-        y_margin = 6
-    elif (player.action == Action.JUMPING_ARIAL_FORWARD or
-          player.action == Action.JUMPING_ARIAL_BACKWARD):
-        pos_x -= 5
-        move_location[1] -= 5
-    x_margin = 1
-
-    # Check if we're in position to wave land
-    if speed_y == 0:
-        return
-    if speed_x > 0 and move_location[0] < platform_left:
-        return
-    if speed_x < 0 and move_location[0] > platform_right:
-        return
-    if speed_y > 0 and move_location[1] > platform_y - y_margin and pos_y >= platform_y:
-        return
-    if speed_y < 0 and move_location[1] > platform_y + y_margin:
-        return
+    if do_fastfall:
+        queue_crouch(kb_controller, use_current_frame=True)
     
     # Get direction of waveland to perform
     right_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.RIGHT)
     left_input = kb_controller.get_analog_hotkey(Button.BUTTON_MAIN, Analog.LEFT)
     direction = 1 if kb_controller.hotkeys_state[right_input] else -1 if kb_controller.hotkeys_state[left_input] else 0
+    waveland_x = -waveland_x if direction == -1 else waveland_x
 
-    # If our direction is away from the platform, check that we're close enough to wave land
-    if (direction == 1 and pos_x >= platform_right - x_margin) or (direction == -1 and pos_x <= platform_left + x_margin):
-        direction = 0
+    true_speed_x = speed_x
+    if speed_x > 0:
+        true_speed_x += size / 2
+    elif speed_x < 0:
+        true_speed_x -= size / 2
+    true_x = move_location[0] + true_speed_x
+
+    # Check if we're in position to wave land
+    if speed_y == 0:
+        return
+    if speed_x > 0 and true_x > platform_right:
+        return
+    if speed_x < 0 and true_x < platform_left:
+        return
+    if speed_y > 0 and move_location[1] > platform_y - y_margin_above and pos_y >= platform_y - y_margin_above:
+        return
+    if speed_y < 0 and move_location[1] > platform_y + y_margin_below:
+        return
+    # Don't waveland if we don't need to
+    elif speed_y < 0 and direction == 0:
+        return
 
     # Queue the wave land input
-    queue_wavedash(kb_controller, player, direction, do_jump=False, use_current_frame=True)
+    queue_wavedash(kb_controller, player, direction, set_x=waveland_x, set_y=waveland_y, do_jump=False, delay=waveland_delay)
     kb_controller.inputs_reserved += console.online_delay * 2
 
 def reset_game_state(kb_controller):
@@ -2547,6 +2848,8 @@ def initialize_game_state(gamestate):
 def main():
     initialized = False
     local_port = 0
+    selected_character = Character.CPTFALCON
+    selected_costume = 0
     tech_lockout = 0
     meteor_jump_lockout = 0
     ledge_grab_count = 0
@@ -2586,9 +2889,7 @@ def main():
         sys.exit(-1)
     print("Controller connected")
 
-    costume = 0
     framedata = melee.framedata.FrameData()
-    print("Initial costume: " + str(costume))
     
     if args.standard_human:
         # Read in dolphin's controller config file
@@ -2621,7 +2922,7 @@ def main():
                 initialized = True
                 alive = True
             
-            local_port, opponent_ports, opponent_port, alive = update_player_info(gamestate, local_port, opponent_ports, alive, costume)
+            local_port, opponent_ports, opponent_port, alive = update_player_info(gamestate, local_port, opponent_ports, alive, selected_costume, selected_character)
             
             if not alive:
                 continue
@@ -2633,8 +2934,7 @@ def main():
                     kb_controller,
                     gamestate,
                     local_player,
-                    framedata,
-                    (stage_bounds_ground, left_plat_bounds, right_plat_bounds, top_plat_bounds)
+                    framedata
                 )
             
             if opponent_port not in gamestate.players:
@@ -2654,14 +2954,18 @@ def main():
                     opponent_player.nana = popo
 
             knownprojectiles = []
-            bomb_found = False
+            bomb_held = False
+            bomb_thrown = False
+            bomb_airborne = False
             for projectile in gamestate.projectiles:
                 # Held turnips and link bombs
                 if projectile.type in [ProjectileType.TURNIP, ProjectileType.LINK_BOMB, ProjectileType.YLINK_BOMB]:
-                    if projectile.subtype in [0, 4, 5]:
+                    if projectile.subtype in [4, 5]:
                         continue
-                    elif projectile.subtype == 3 and projectile.owner == local_port:
-                        bomb_found = True
+                    if projectile.owner == local_port:
+                        bomb_held = projectile.subtype == 0
+                        bomb_thrown = projectile.subtype == 2
+                        bomb_airborne = projectile.subtype == 3
                 # Charging arrows
                 if projectile.type in [ProjectileType.YLINK_ARROW, ProjectileType.FIRE_ARROW, \
                     ProjectileType.LINK_ARROW, ProjectileType.ARROW]:
@@ -2760,38 +3064,29 @@ def main():
             elif local_player.character == Character.FALCO:
                 shine_on_shield = handle_shine(kb_controller, gamestate, local_player, opponent_player, framedata, shine_on_shield)
             elif local_player.character == Character.LINK:
-                acid_dropped = bomb_found
-                acid_dropped = handle_aciddrop(kb_controller, gamestate, local_player, opponent_player, framedata, acid_dropped)
+                acid_dropped = bomb_airborne
+                acid_dropped = handle_aciddrop(kb_controller, gamestate, local_player, opponent_player, framedata, acid_dropped, bomb_held, bomb_thrown)
             elif local_player.character == Character.SAMUS:
-                handle_superwavedash(kb_controller, gamestate, local_player, framedata)
+                handle_samusattack(kb_controller, gamestate, local_player, framedata)
             if can_airdash(local_player):
                 handle_airdash(kb_controller, gamestate, local_player, framedata)
             if can_airturn(local_player):
                 handle_airturn(kb_controller, gamestate, local_player, framedata)
             
-            interruptable, no_impact_land, ecb_shift = handle_ledgedash(
-                kb_controller,
-                gamestate,
-                local_player,
-                opponent_player,
-                interruptable,
-                no_impact_land,
-                ecb_shift
-            )
+            interruptable, no_impact_land, ecb_shift = handle_ledgedash(kb_controller,gamestate,local_player,opponent_player,interruptable,no_impact_land,ecb_shift)
             
-            if frames_left > 0 or kb_controller.inputs_reserved > 0:
+            if frames_left > 0 or kb_controller.inputs_reserved > gamestate.frame + 1:
                 continue
             
             handle_counter_and_dodge(kb_controller, gamestate, local_player, opponent_player, framedata)
             handle_techchase(kb_controller, gamestate, local_player, opponent_player, framedata)
             handle_projectiles(kb_controller, gamestate, local_player, framedata, opponent_player, knownprojectiles)
-            handle_shieldoption(kb_controller, gamestate, local_player, framedata, opponent_player)
+            handle_shieldoption(kb_controller, gamestate, local_player, framedata, opponent_player, stage_bounds_ground)
             handle_waveland(
                 kb_controller,
                 gamestate,
                 local_player,
-                framedata,
-                (stage_bounds_ground, left_plat_bounds, right_plat_bounds, top_plat_bounds)
+                framedata
             )
             
             if log:
@@ -2817,6 +3112,9 @@ def main():
             has_teched = False
             sdi_frames = 0
             shine_on_shield = False
+            if gamestate.menu_state in [melee.enums.Menu.CHARACTER_SELECT, melee.enums.Menu.SLIPPI_ONLINE_CSS]:
+                selected_character = gamestate.players[1].character_selected
+                selected_costume = gamestate.players[1].costume
             
             # If we're not in game, don't log the frame
             if log:
